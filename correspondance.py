@@ -39,21 +39,19 @@ def extract_kp(src_sdf, h_i, w_i):
     the robot angular or translational speed
 
     :param src_sdf:
-    :param tgt_sdf:
-    :param grid_spacing:
-    :param pad:
-    :return:
+    :param h_i: index array of h co-ordinates
+    :return: w_i: index array of w co-ordinates
     """
 
     # compute the march maps
     src_map_h, src_map_w = march_map(src_sdf)
 
     # move each sampled point to the surface using the march map
-    src_h_c = src_map_h[h_i, w_i] + h
-    src_w_c = src_map_w[h_i, w_i] + w
+    src_h_c = h_i + src_map_h[h_i, w_i]
+    src_w_c = w_i + src_map_w[h_i, w_i]
 
-    # stack the results in an N, (src,tgt), (h,w) matrix
-    return np.stack([src_h_c, src_w_c], axis=1)
+    # stack the results in an (h, w), N
+    return np.stack([src_h_c, src_w_c])
 
 
 fig = plt.figure(figsize=(18, 10))
@@ -75,12 +73,13 @@ for t in range(episode.shape[0]-1):
     t0_plot.imshow(t0)
     t1_plot.imshow(t1)
 
-    corresp_l = extract_kp(t0, h_i, w_i)
+    t0_kp = extract_kp(t0, h_i, w_i)
+    t1_kp = extract_kp(t1, h_i, w_i)
 
     # plot the corresponding points
-    for i in range(corresp_l.shape[0]):
-        t0_plot.scatter(corresp_l[i, 0, 1], corresp_l[i, 0, 0])
-        t1_plot.scatter(corresp_l[i, 1, 1], corresp_l[i, 1, 0])
+    for i in range(t0_kp.shape[1]):
+        t0_plot.scatter(t0_kp[1, i], t0_kp[0, i])
+        t1_plot.scatter(t1_kp[1, i], t1_kp[0, i])
 
     fig.canvas.draw()
 
