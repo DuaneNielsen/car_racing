@@ -1,6 +1,46 @@
 import numpy as np
 
 
+def R(theta):
+    return np.array([
+        [np.cos(theta), np.sin(theta)],
+        [-np.sin(theta), np.cos(theta)]
+    ])
+
+
+def R_around_point(theta, x=0.0, y=0.0):
+    """
+    returns a homogenous rotation matrix around point x,y
+    :param theta: angle
+    :param x: x co-ordinate of point to rotate around
+    :param y: y co-ordinate of point to rotate around
+    :return: homogenous transformation matrix
+    """
+    return np.array([
+        [np.cos(theta), -np.sin(theta), x - np.cos(theta) * x + np.sin(theta) * y],
+        [np.sin(theta), np.cos(theta), y - np.sin(theta) * x + np.cos(theta) * y],
+        [0., 0., 1.]
+    ])
+
+
+def R_around_point_from_R(R, x, y):
+    """
+    returns a homogenous rotation matrix around point x,y
+
+    :param R: rotation matrix
+    :param x: x co-ordinate of point to rotate around
+    :param y: y co-ordinate of point to rotate around
+    :return: homogenous transformation matrix
+    """
+    tx = x - R[0, 0] * x - R[0, 1] * y
+    ty = y - R[1, 0] * x - R[1, 1] * y
+    return np.array([
+        [R[0, 0], R[0, 1], tx],
+        [R[1, 0], R[1, 1], ty],
+        [0., 0., 1]
+    ])
+
+
 class Frame:
     def __init__(self):
         self._R = np.eye(2)
@@ -55,7 +95,7 @@ class Frame:
         transforms to world space
         :return: homogenous matrix in SE2
         """
-        M = np.concatenate((self.R, self._t), axis=1)
+        M = np.concatenate((self._R, self._t), axis=1)
         return np.concatenate([M, np.array([0., 0., 1]).reshape(1, 3)], axis=0)
 
     @property
@@ -64,28 +104,28 @@ class Frame:
         transforms from world space to object space
         :return:  inverse homogenous matrix in SE2
         """
-        M = np.concatenate((self.R.T, np.matmul(-self.R.T, self._t)), axis=1)
+        M = np.concatenate((self._R.T, np.matmul(-self._R.T, self._t)), axis=1)
         return np.concatenate([M, np.array([0., 0., 1]).reshape(1, 3)], axis=0)
 
 
 class Scan(Frame):
-    def __init__(self, x=0.0, y=0.0, theta=0.0):
+    def __init__(self, height, width, x=0.0, y=0.0, theta=0.0):
         super().__init__()
         self.x = x
         self.y = y
         self.theta = theta
-        self.height = 20
-        self.width = 30
-        self.i = np.zeros((self.height, self.width))
+        self.h = height
+        self.w = width
+        self.i = np.zeros((self.h, self.w))
         self.i[0, :] = 1.0
-        self.i[self.height - 1, :] = 1.0
+        self.i[self.h - 1, :] = 1.0
         self.i[:, 0] = 1.0
-        self.i[:, self.width - 1] = 1.0
+        self.i[:, self.w - 1] = 1.0
         self.vertices = np.array([
             [0, 0],
-            [self.width, 0],
-            [self.width, self.height],
-            [0, self.height]
+            [self.w, 0],
+            [self.w, self.h],
+            [0, self.h]
         ])
 
 
@@ -107,18 +147,18 @@ class Keypoints(Frame):
         self.width = 30
 
 
-def grid_sample(x, y, grid_spacing, pad=0):
+def grid_sample(h, w, grid_spacing, pad=0):
     """
 
-    :param x: length of grid in x (width)
-    :param y: length of grid in y (height)
+    :param w: width of grid
+    :param h: height of grid
     :param grid_spacing: spacing between samples
     :param pad: padding at the edges
     :return: N, 2 array of x, y integer co-ordinates
     """
-    x, y = x - 1 - pad, y - 1 - pad
-    x_i = np.floor(np.linspace(pad, x, x // grid_spacing)).astype(int)
-    y_i = np.floor(np.linspace(pad, y, y // grid_spacing)).astype(int)
+    w, h = w - 1 - pad, h - 1 - pad
+    x_i = np.floor(np.linspace(pad, w, w // grid_spacing)).astype(int)
+    y_i = np.floor(np.linspace(pad, h, h // grid_spacing)).astype(int)
     x_i, y_i = np.meshgrid(x_i, y_i)
     return np.stack([x_i.flatten(), y_i.flatten()], axis=1)
 

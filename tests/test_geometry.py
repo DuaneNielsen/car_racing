@@ -49,11 +49,12 @@ def test_inside():
 
 
 def test_inverse():
-    f1 = geo.Scan()
-    assert np.allclose(np.matmul(f1.M, f1.inv_M), np.eye(3))
+    f1 = geo.Scan(30, 20)
+    assert np.allclose(np.matmul(f1.inv_M, f1.M), np.eye(3))
 
-    f2 = geo.Scan(x=5, y=8, theta=np.radians(30))
+    f2 = geo.Scan(30, 20, x=5, y=8, theta=np.radians(30))
     assert np.allclose(np.matmul(f2.inv_M, f2.M), np.eye(3))
+    assert np.allclose(np.matmul(f2.M, f2.inv_M), np.eye(3))
 
 
 def test_homo():

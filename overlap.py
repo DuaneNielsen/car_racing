@@ -10,13 +10,13 @@ if __name__ == '__main__':
     r1, r2, world = fig.subplots(1, 3)
     fig.show()
 
-    f1 = geo.Scan()
+    f1 = geo.Scan(20, 30)
     assert np.allclose(np.matmul(f1.M, f1.inv_M), np.eye(3))
 
-    f2 = geo.Scan(x=5, y=8, theta=np.radians(30))
+    f2 = geo.Scan(20, 30, x=5, y=8, theta=np.radians(30))
     assert np.allclose(np.matmul(f2.inv_M, f2.M), np.eye(3))
 
-    grid = geo.grid_sample(f1.width, f1.height, grid_spacing=4, pad=2)
+    grid = geo.grid_sample(f1.h, f1.w, grid_spacing=4, pad=2)
     M = np.matmul(f1.inv_M, f2.M)
     grid_f2 = geo.transform_points(M, grid.T).T
 
