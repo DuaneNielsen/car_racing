@@ -199,7 +199,7 @@ def inside(P, convex_poly):
     """
     Check if a list of points are inside a convex polygon
     :param P: 2, N list of points
-    :param convex_poly: 2, V list of polygon vertices wound counter-clockwise
+    :param convex_poly: 2, V list of convex polygon vertices wound counter-clockwise
     :return: 1, N boolean, True if inside poly
     """
 

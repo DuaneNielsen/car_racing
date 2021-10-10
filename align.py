@@ -66,7 +66,7 @@ def draw():
     plt.pause(1.0)
 
 
-for _ in range(20):
+for _ in range(4):
 
     # project t0 sample index to t1 and filter points in the reference grid
     grid_t0, grid_t1 = geo.project_and_clip_sample_indices(grid, t0_scan, t1_scan)
@@ -83,7 +83,9 @@ for _ in range(20):
 
     # compute alignment and update the t1 frame
     R, t = icp.icp(t1_kp_w, t0_kp_w)
-    t1_scan.t += t
+
+    t1_scan.t += np.matmul(R, t)
     t1_scan.R = np.matmul(R, t1_scan.R)
+
 
 plt.show()

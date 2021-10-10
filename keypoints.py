@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def gradient(img, dx, dy, ksize=3):
+def gradient(img, dx, dy, ksize=5):
     deriv_filter = cv2.getDerivKernels(dx=dx, dy=dy, ksize=ksize, normalize=True)
     return cv2.sepFilter2D(img, -1, deriv_filter[0], deriv_filter[1])
 
