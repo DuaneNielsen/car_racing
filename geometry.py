@@ -123,10 +123,10 @@ class Scan(Frame):
         self.i[:, self.w - 1] = 1.0
         self.vertices = np.array([
             [0, 0],
-            [self.w, 0],
-            [self.w, self.h],
-            [0, self.h]
-        ])
+            [self.w-1, 0],
+            [self.w-1, self.h-1],
+            [0, self.h-1]
+        ]).T
 
 
 class Keypoints(Frame):
@@ -154,13 +154,13 @@ def grid_sample(h, w, grid_spacing, pad=0):
     :param h: height of grid
     :param grid_spacing: spacing between samples
     :param pad: padding at the edges
-    :return: N, 2 array of x, y integer co-ordinates
+    :return: 2, N array of x, y integer co-ordinates
     """
     w, h = w - 1 - pad, h - 1 - pad
     x_i = np.floor(np.linspace(pad, w, w // grid_spacing)).astype(int)
     y_i = np.floor(np.linspace(pad, h, h // grid_spacing)).astype(int)
     x_i, y_i = np.meshgrid(x_i, y_i)
-    return np.stack([x_i.flatten(), y_i.flatten()], axis=1)
+    return np.stack([x_i.flatten(), y_i.flatten()])
 
 
 def transform_points(M, P):

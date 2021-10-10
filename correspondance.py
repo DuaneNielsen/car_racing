@@ -1,14 +1,7 @@
 from matplotlib import pyplot as plt
 import numpy as np
 import cv2
-
-
-def grid_sample(h, w, grid_spacing, pad=0):
-    h, w = h - 1 - pad, w - 1 - pad
-    h_i = np.floor(np.linspace(pad, h, h // grid_spacing)).astype(int)
-    w_i = np.floor(np.linspace(pad, w, w // grid_spacing)).astype(int)
-    h_m, w_m = np.meshgrid(h_i, w_i)
-    return h_m.flatten(), w_m.flatten()
+import geometry as geo
 
 
 def gradient(img, dx, dy, ksize=3):
@@ -62,9 +55,9 @@ fig.show()
 episode = np.load('episode.npy')
 
 # list of sample indices
-h_i, w_i = grid_sample(*episode.shape[1:3], grid_spacing=16, pad=2)
+grid = geo.grid_sample(*episode.shape[1:3], grid_spacing=16, pad=2)
 
-for t in range(episode.shape[0]-1):
+for t in range(30, episode.shape[0]-1):
 
     t0 = episode[t]
     t1 = episode[t + 1]
@@ -73,8 +66,8 @@ for t in range(episode.shape[0]-1):
     t0_plot.imshow(t0)
     t1_plot.imshow(t1)
 
-    t0_kp = extract_kp(t0, h_i, w_i)
-    t1_kp = extract_kp(t1, h_i, w_i)
+    t0_kp = extract_kp(t0, grid[1], grid[0])
+    t1_kp = extract_kp(t1, grid[1], grid[0])
 
     # plot the corresponding points
     for i in range(t0_kp.shape[1]):
@@ -82,4 +75,5 @@ for t in range(episode.shape[0]-1):
         t1_plot.scatter(t1_kp[1, i], t1_kp[0, i])
 
     fig.canvas.draw()
+    plt.show()
 

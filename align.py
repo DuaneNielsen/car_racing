@@ -1,16 +1,9 @@
 import numpy as np
-from numpy.linalg import svd
 import cv2
 from matplotlib import pyplot as plt
-import math
-
-
-def grid_sample(h, w, grid_spacing, pad=0):
-    h, w = h - 1 - pad, w - 1 - pad
-    h_i = np.floor(np.linspace(pad, h, h // grid_spacing)).astype(int)
-    w_i = np.floor(np.linspace(pad, w, w // grid_spacing)).astype(int)
-    h_m, w_m = np.meshgrid(h_i, w_i)
-    return h_m.flatten(), w_m.flatten()
+from matplotlib.patches import Polygon
+import icp
+import geometry as geo
 
 
 def gradient(img, dx, dy, ksize=3):
@@ -56,137 +49,107 @@ def extract_kp(src_sdf, h_i, w_i):
     return np.stack([src_h_c, src_w_c])
 
 
-def rms(source, target):
-    return np.sum((source - target) ** 2) / source.shape[1]
-
-
-def icp(source, target):
-    """
-
-    :param source: set of source points, D, N
-    :param target: corresponding set of target points, D, N
-    :return: corrected source points, rotation matrix, translation
-    """
-    source_center = source.mean(axis=1, keepdims=True)
-    target_center = target.mean(axis=1, keepdims=True)
-    t = - target_center + source_center
-    source = target + t
-    corr = np.matmul(target, source.T)
-    u, d, v = svd(corr)
-    R = np.matmul(u, v.T)
-    source = np.matmul(R, source)
-    return source, R, t
-
-
 fig = plt.figure(figsize=(18, 10))
-axes = fig.subplots(1, 2)
-pre_warped_plot, after_warped_plot, = axes
+axes = fig.subplots(1)
+world = axes
 fig.show()
-
 
 episode = np.load('episode.npy')
 
 # list of sample indices
-h_i, w_i = grid_sample(*episode.shape[1:3], grid_spacing=16, pad=12)
+grid = geo.grid_sample(*episode.shape[1:3], grid_spacing=16, pad=6)
 
-t = 30
+timestep = 30
 
-t0 = episode[t]
-t1 = episode[t + 1]
+t0 = episode[timestep]
+t1 = episode[timestep + 1]
 
-t0_kp = extract_kp(t0, h_i, w_i)
-t1_kp = extract_kp(t1, h_i, w_i)
-print(rms(t1_kp, t0_kp))
-
-t1_kp_warped = t1_kp.copy()
-
-
-t1_kp_warped, R, translate = icp(t1_kp_warped, t0_kp)
-translate = np.concatenate((np.eye(2), translate), axis=1)
-t1_warped = cv2.warpAffine(t1, translate, (t1.shape[1], t1.shape[0]))
-rotate = cv2.getRotationMatrix2D(center=(translate[0, 2], translate[1, 2]), angle=math.acos(R[0, 0]), scale=1.0)
-t1_warped = cv2.warpAffine(t1_warped, rotate, (t1.shape[1], t1.shape[0]))
-print(rms(t1_kp_warped, t0_kp))
-t1_kp_warped = extract_kp(t1_warped, h_i, w_i)
-print(rms(t1_kp_warped, t0_kp))
-
-t1_kp_warped, R, translate = icp(t1_kp_warped, t0_kp)
-translate = np.concatenate((np.eye(2), translate), axis=1)
-t1_warped = cv2.warpAffine(t1_warped, translate, (t1.shape[1], t1.shape[0]))
-rotate = cv2.getRotationMatrix2D(center=(translate[0, 2], translate[1, 2]), angle=math.acos(R[0, 0]), scale=1.0)
-t1_warped = cv2.warpAffine(t1_warped, rotate, (t1.shape[1], t1.shape[0]))
-print(rms(t1_kp_warped, t0_kp))
-t1_kp_warped = extract_kp(t1_warped, h_i, w_i)
-print(rms(t1_kp_warped, t0_kp))
-
-t1_kp_warped, R, translate = icp(t1_kp_warped, t0_kp)
-translate = np.concatenate((np.eye(2), translate), axis=1)
-t1_warped = cv2.warpAffine(t1_warped, translate, (t1.shape[1], t1.shape[0]))
-rotate = cv2.getRotationMatrix2D(center=(translate[0, 2], translate[1, 2]), angle=math.acos(R[0, 0]), scale=1.0)
-t1_warped = cv2.warpAffine(t1_warped, rotate, (t1.shape[1], t1.shape[0]))
-print(rms(t1_kp_warped, t0_kp))
-t1_kp_warped = extract_kp(t1_warped, h_i, w_i)
-print(rms(t1_kp_warped, t0_kp))
+t0_frame = geo.Scan(*t0.shape)
+t1_frame = geo.Scan(*t1.shape)
+# t1_frame.x += 5.0
+# t1_frame.y += 10.0
 
 
-t1_kp_warped, R, translate = icp(t1_kp_warped, t0_kp)
-translate = np.concatenate((np.eye(2), translate), axis=1)
-t1_warped = cv2.warpAffine(t1_warped, translate, (t1.shape[1], t1.shape[0]))
-rotate = cv2.getRotationMatrix2D(center=(translate[0, 2], translate[1, 2]), angle=math.acos(R[0, 0]), scale=1.0)
-t1_warped = cv2.warpAffine(t1_warped, rotate, (t1.shape[1], t1.shape[0]))
-print(rms(t1_kp_warped, t0_kp))
-t1_kp_warped = extract_kp(t1_warped, h_i, w_i)
-print(rms(t1_kp_warped, t0_kp))
+def draw_scan_in_world(scan, color):
+    scan_v_wf = geo.transform_points(scan.M, scan.vertices)
+    world.add_patch(Polygon(scan_v_wf.T, color=color, fill=False))
+    world.autoscale_view()
 
 
-t1_kp_warped, R, translate = icp(t1_kp_warped, t0_kp)
-translate = np.concatenate((np.eye(2), translate), axis=1)
-t1_warped = cv2.warpAffine(t1_warped, translate, (t1.shape[1], t1.shape[0]))
-rotate = cv2.getRotationMatrix2D(center=(translate[0, 2], translate[1, 2]), angle=math.acos(R[0, 0]), scale=1.0)
-t1_warped = cv2.warpAffine(t1_warped, rotate, (t1.shape[1], t1.shape[0]))
-print(rms(t1_kp_warped, t0_kp))
-t1_kp_warped = extract_kp(t1_warped, h_i, w_i)
-print(rms(t1_kp_warped, t0_kp))
-
-# t1_kp_warped = extract_kp(t1_warped, h_i, w_i)
-# prev_rms_error, d_rms_error = rms(t1_kp_warped, t0_kp), 10.0
-# print(f'warped svt error {rms(t1_kp_warped, t0_kp)}')
-#
-# # re-align by icp
-# while d_rms_error > 0.01:
-#     t1_kp_warped, R, translate = icp(t1_kp_warped, t0_kp)
-#     rms_error = rms(t1_kp_warped, t0_kp)
-#     d_rms_error = abs(prev_rms_error - rms_error)
-#     print(rms_error)
-#     prev_rms_error = rms_error
-#
-# print(rms(t1_kp_warped, t0_kp))
+def draw_grid_in_world(grid, scan, label=None):
+    grid_w = geo.transform_points(scan.M, grid)
+    world.scatter(grid_w[0], grid_w[1], label=label)
 
 
-while True:
+def draw_frame():
+    h, w = 100, 120
+    world.clear()
+    world.set_aspect('equal')
 
-    # show t0
-    [ax.clear() for ax in axes]
-    pre_warped_plot.imshow(t0)
-    after_warped_plot.imshow(t0)
-
-    # plot the corresponding points
-    for i in range(t0_kp.shape[1]):
-        pre_warped_plot.scatter(t0_kp[1, i], t0_kp[0, i])
-        after_warped_plot.scatter(t0_kp[1, i], t0_kp[0, i])
-
-    fig.canvas.draw()
+    world.imshow(cv2.warpAffine(t0, t0_frame.M[0:2], (w, h)))
+    draw_scan_in_world(t0_frame, color=[0, 0, 1.])
+    draw_scan_in_world(t1_frame, color=[0, 1, 0.])
+    plt.pause(1.0)
+    world.imshow(cv2.warpAffine(t1, t1_frame.M[0:2], (w, h)))
+    draw_scan_in_world(t0_frame, color=[0, 0, 1.])
+    draw_scan_in_world(t1_frame, color=[0, 1, 0.])
     plt.pause(1.0)
 
-    # show warp
-    [ax.clear() for ax in axes]
-    pre_warped_plot.imshow(t1)
-    after_warped_plot.imshow(t1_warped)
 
-    # plot the corresponding points
-    for i in range(t0_kp.shape[1]):
-        pre_warped_plot.scatter(t1_kp[1, i], t1_kp[0, i])
-        after_warped_plot.scatter(t1_kp_warped[1, i], t1_kp_warped[0, i])
+def draw():
 
-    fig.canvas.draw()
+    draw_frame()
+    draw_grid_in_world(grid_t0, t0_frame, label='frame0')
+    draw_grid_in_world(grid_t1, t1_frame, label='frame1')
+    plt.legend()
     plt.pause(1.0)
+
+    draw_frame()
+    world.scatter(t0_kp_w[1], t0_kp_w[0], label='frame0')
+    world.scatter(t1_kp_w[1], t1_kp_w[0], label='frame1')
+    plt.legend()
+    plt.pause(1.0)
+
+
+for _ in range(4):
+
+    # compute projections between the frames
+    M_t0_t1 = np.matmul(t1_frame.inv_M, t0_frame.M)
+    M_t1_t0 = np.matmul(t0_frame.inv_M, t1_frame.M)
+
+    # project the t0 sample grid into t1s frame
+    grid_t1 = np.floor(geo.transform_points(M_t0_t1, grid)).astype(int)
+
+    # filter sample points that are outside the t1 frame
+    grid_t1_s_inside = geo.inside(grid_t1, t1_frame.vertices)
+    grid_t1 = grid_t1[:, grid_t1_s_inside]
+    grid_t0 = grid[:, grid_t1_s_inside]
+
+    # extract key-points by following signed vector gradients
+    t0_kp = extract_kp(t0, grid_t0[1], grid_t0[0])
+    t1_kp = extract_kp(t1, grid_t1[1], grid_t1[0])
+
+    # project the kp into world space and align them
+    t0_kp_w = geo.transform_points(t0_frame.M, t0_kp)
+    t1_kp_w = geo.transform_points(t1_frame.M, t1_kp)
+
+    # project bounding boxes into the world frame and verify kp are inside the intersection
+    t0_rect_w = geo.transform_points(t0_frame.M, t0_frame.vertices)
+    t1_rect_w = geo.transform_points(t0_frame.M, t0_frame.vertices)
+    t0_kp_inside_t0 = geo.inside(t0_kp_w, t0_rect_w)
+    t1_kp_inside_t0 = geo.inside(t1_kp_w, t0_rect_w)
+    t0_kp_inside_t1 = geo.inside(t0_kp_w, t1_rect_w)
+    t1_kp_inside_t1 = geo.inside(t1_kp_w, t1_rect_w)
+    intersection = t0_kp_inside_t1 & t1_kp_inside_t0 & t0_kp_inside_t1 & t1_kp_inside_t1
+    t0_kp_w = t0_kp_w[:, intersection]
+    t1_kp_w = t1_kp_w[:, intersection]
+
+    print(icp.rms(t1_kp_w, t0_kp_w))
+    draw()
+
+    # compute alignment and update the t1 frame
+    R, t = icp.icp(t1_kp_w, t0_kp_w)
+    t1_frame.t += t
+    t1_frame.R = np.matmul(R, t1_frame.R)
+
+plt.show()
