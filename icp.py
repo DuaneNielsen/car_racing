@@ -14,6 +14,8 @@ def icp(source, target):
     :param source: set of source points, D, N
     :param target: corresponding set of target points, D, N
     :return: rotation matrix, translation from Source -> Target
+
+    note: the translation output by this function already accounts for the rotation
     """
     _, N = source.shape
 
