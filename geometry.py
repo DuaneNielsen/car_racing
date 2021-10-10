@@ -233,3 +233,38 @@ def inside(P, convex_poly):
 
     # if all points are to the left of the polygon lines, the point is inside
     return np.all(inside, axis=0)
+
+
+def project_and_clip(t0_kp, t1_kp, t0_scan, t1_scan):
+    """
+    project corresponding key-points from each frame into world space
+    and remove key-points that are outside the overlap of the scan areas
+
+    :param t0_kp: 2, N list of key-points in t0 frame
+    :param t1_kp: 2, N list of key-points in t1 frame
+    :param t0_scan: t0 scan
+    :param t1_scan: t1 scan
+    :return:
+    """
+
+    # project the kp into world space and align them
+    t0_kp_world = geo.transform_points(t0_scan.M, t0_kp)
+    t1_kp_world = geo.transform_points(t1_scan.M, t1_kp)
+
+    # project bounding boxes into the world frame
+    t0_rect_world = geo.transform_points(t0_scan.M, t0_scan.vertices)
+    t1_rect_world = geo.transform_points(t1_scan.M, t1_scan.vertices)
+
+    # verify kp are inside the intersection
+    t0_kp_inside_t0 = geo.inside(t0_kp_world, t0_rect_world)
+    t1_kp_inside_t0 = geo.inside(t1_kp_world, t0_rect_world)
+    t0_kp_inside_t1 = geo.inside(t0_kp_world, t1_rect_world)
+    t1_kp_inside_t1 = geo.inside(t1_kp_world, t1_rect_world)
+
+    intersection = t0_kp_inside_t0 & t1_kp_inside_t0 & t0_kp_inside_t1 & t1_kp_inside_t1
+
+    # filter the kp outside the intersection
+    t0_kp_world = t0_kp_world[:, intersection]
+    t1_kp_world = t1_kp_world[:, intersection]
+
+    return t0_kp_world, t1_kp_world

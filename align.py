@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import icp
 import geometry as geo
+from geometry import project_and_clip
 from keypoints import extract_kp
 
 fig = plt.figure(figsize=(18, 10))
@@ -86,20 +87,7 @@ for _ in range(20):
     t0_kp = extract_kp(t0, grid_t0)
     t1_kp = extract_kp(t1, grid_t1)
 
-    # project the kp into world space and align them
-    t0_kp_w = geo.transform_points(t0_frame.M, t0_kp)
-    t1_kp_w = geo.transform_points(t1_frame.M, t1_kp)
-
-    # project bounding boxes into the world frame and verify kp are inside the intersection
-    t0_rect_w = geo.transform_points(t0_frame.M, t0_frame.vertices)
-    t1_rect_w = geo.transform_points(t0_frame.M, t0_frame.vertices)
-    t0_kp_inside_t0 = geo.inside(t0_kp_w, t0_rect_w)
-    t1_kp_inside_t0 = geo.inside(t1_kp_w, t0_rect_w)
-    t0_kp_inside_t1 = geo.inside(t0_kp_w, t1_rect_w)
-    t1_kp_inside_t1 = geo.inside(t1_kp_w, t1_rect_w)
-    intersection = t0_kp_inside_t1 & t1_kp_inside_t0 & t0_kp_inside_t1 & t1_kp_inside_t1
-    t0_kp_w = t0_kp_w[:, intersection]
-    t1_kp_w = t1_kp_w[:, intersection]
+    t0_kp_w, t1_kp_w = project_and_clip(t0_kp, t1_kp, t0_frame, t1_frame)
 
     print(icp.rms(t1_kp_w, t0_kp_w))
     draw()
