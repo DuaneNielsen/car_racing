@@ -109,18 +109,14 @@ class Frame:
 
 
 class Scan(Frame):
-    def __init__(self, height, width, x=0.0, y=0.0, theta=0.0):
+    def __init__(self, height, width, image=None, x=0.0, y=0.0, theta=0.0):
         super().__init__()
         self.x = x
         self.y = y
         self.theta = theta
         self.h = height
         self.w = width
-        self.i = np.zeros((self.h, self.w))
-        self.i[0, :] = 1.0
-        self.i[self.h - 1, :] = 1.0
-        self.i[:, 0] = 1.0
-        self.i[:, self.w - 1] = 1.0
+        self.image = image
         self.vertices = np.array([
             [0, 0],
             [self.w-1, 0],

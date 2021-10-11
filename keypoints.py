@@ -21,7 +21,7 @@ def march_map(sdf):
     return x, y
 
 
-def extract_kp(src_sdf, sample_index):
+def extract_kp(src_sdf, sample_index, iterations=2):
     """
     computes a set of corresponding points for two sdfs by grid sampling
     and following the sdf gradient to the nearest surface
@@ -36,9 +36,10 @@ def extract_kp(src_sdf, sample_index):
     # compute the march maps
     src_map_x, src_map_y = march_map(src_sdf)
 
-    # move each sampled point to the surface using the march map
-    src_x_c = sample_index[0] + src_map_x[sample_index[1], sample_index[0]]
-    src_y_c = sample_index[1] + src_map_y[sample_index[1], sample_index[0]]
+    for _ in range(iterations):
+        # move each sampled point to the surface using the march map
+        src_x_c = sample_index[0] + src_map_x[sample_index[1], sample_index[0]]
+        src_y_c = sample_index[1] + src_map_y[sample_index[1], sample_index[0]]
+        sample_index = np.round(np.stack([src_x_c, src_y_c])).astype(int)
 
-    # stack the results in an (h, w), N
-    return np.stack([src_x_c, src_y_c])
+    return sample_index

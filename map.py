@@ -3,6 +3,34 @@ from matplotlib import pyplot as plt
 import cv2
 import numpy as np
 from scipy.ndimage import distance_transform_edt
+from pyglet.window import key
+
+a = np.array([0.0, 0.0, 0.0])
+
+
+def key_press(k, mod):
+    global restart
+    if k == 0xFF0D:
+        restart = True
+    if k == key.LEFT:
+        a[0] = -1.0
+    if k == key.RIGHT:
+        a[0] = +1.0
+    if k == key.UP:
+        a[1] = +1.0
+    if k == key.DOWN:
+        a[2] = +0.8  # set 1.0 for wheels to block to zero rotation
+
+
+def key_release(k, mod):
+    if k == key.LEFT and a[0] == -1.0:
+        a[0] = 0
+    if k == key.RIGHT and a[0] == +1.0:
+        a[0] = 0
+    if k == key.UP:
+        a[1] = 0
+    if k == key.DOWN:
+        a[2] = 0
 
 fig = plt.figure(figsize=(18, 10))
 axes = fig.subplots(1, 4)
@@ -13,13 +41,16 @@ env = gym.make('CarRacing-v0')
 state, done = env.reset(), False
 action = env.action_space.sample()
 env.render()
+env.viewer.window.on_key_press = key_press
+env.viewer.window.on_key_release = key_release
 
-episode = []
+episode_sdf = []
+episode_state = []
 
 while not done:
-    state, reward, done, info = env.step(action)
-    action = env.action_space.sample()
-    action[1], action[2] = 0.5, 0.0  # gas, brake
+    state, reward, done, info = env.step(a)
+    # action = env.action_space.sample()
+    # action[1], action[2] = 0.5, 0.0  # gas, brake
 
     # crop the input image
     crop = state[:60]
@@ -27,7 +58,9 @@ while not done:
     raw_plot.imshow(crop)
 
     # segment the image
-    segment = np.logical_and(crop[:, :, 1] > 100, crop[:, :, 1] < 110).astype(float)
+    road = np.logical_and(crop[:, :, 1] > 100, crop[:, :, 1] < 110)
+    bushes = crop[:, :, 1] == 229
+    segment = (road | bushes).astype(float)
     segment_plot.imshow(segment)
 
     # Scharr the edges
@@ -42,9 +75,11 @@ while not done:
 
     env.render()
     fig.canvas.draw()
-    episode += [sdf]
-    if len(episode) > 300:
+    episode_sdf += [sdf]
+    episode_state += [state]
+    if len(episode_sdf) > 300:
         break
 
 
-np.save('episode', episode)
+np.save('episode_sdf', np.stack(episode_sdf))
+np.save('episode_state', np.stack(episode_state))
