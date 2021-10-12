@@ -87,7 +87,7 @@ if __name__ == '__main__':
     t0_scan = geo.Scan(*t0.shape)
     t1_scan = geo.Scan(*t1.shape)
 
-    for _ in range(1):
+    for _ in range(2):
 
         # project t0 sample index to t1 and filter points in the reference grid
         grid_t0, grid_t1 = geo.project_and_clip_sample_indices(grid, t0_scan, t1_scan)
@@ -98,12 +98,18 @@ if __name__ == '__main__':
 
         # project key-points to world space and clip key-points outside the scan overlap
         t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0_scan, t1_scan)
+        rms_before = icp.rms(t1_kp_w, t0_kp_w)
 
-        print(icp.rms(t1_kp_w, t0_kp_w))
-        draw()
+        # filter non unique keypoints
+        unique = geo.naive_unique(t0_kp_w)
+        t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
+        unique = geo.naive_unique(t1_kp_w)
+        t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
 
         # compute alignment and update the t1 frame
-        R, t = icp.icp(t1_kp_w, t0_kp_w)
+        R, t, t1_kp_w, t0_kp_w, error = icp.ransac_icp(t1_kp_w, t0_kp_w, k=5, n=5)
+        print(f'rms_before {rms_before},  rms_after: {error}')
+        draw()
 
         t1_scan.t += t
         t1_scan.R = np.matmul(R, t1_scan.R)

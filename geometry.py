@@ -291,3 +291,20 @@ def project_and_clip_kp(t0_kp, t1_kp, t0_scan, t1_scan):
 
     return t0_kp_world, t1_kp_world
 
+
+def naive_unique(kp):
+    """
+
+    :param kp: 2, N array of keypoints
+    :return: index array of boolean, True if point is unique
+        non - unique points in sequence are discarded in order of lowest index first..
+        ie: input sequence [1, 1, 1, 0] then we would return filter [False, False True, True]
+    """
+
+    _, N = kp.shape
+    unique = np.ones(N, dtype=np.bool8)
+    for i in range(N-1):
+        d = np.abs(kp[:, i+1:] - kp[:, i:i+1])
+        d = d.sum(axis=0)
+        unique[i] = np.all(d != 0)
+    return unique

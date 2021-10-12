@@ -80,3 +80,20 @@ def test_homo():
     # translate first then rotate
     tri_t_r = np.matmul(R, tri + t)
     assert ~np.allclose(tri_h, tri_t_r)
+
+
+def test_unique():
+    rect = np.array([
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+        [1, 1],
+        [2, 2],
+        [2, 2]
+    ]).T
+
+    uniq = np.array([True, True, False, True, True, False, True])
+
+    filter = geo.naive_unique(rect)
+    assert np.all(~(filter ^ uniq))

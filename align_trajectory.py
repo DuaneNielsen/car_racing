@@ -19,7 +19,7 @@ def draw_grid_in_world(grid, scan, label=None):
 
 
 def draw_scan(delay):
-    h, w = 100, 120
+    h, w = 200, 200
     world.clear()
     world.set_aspect('equal')
 
@@ -62,6 +62,7 @@ if __name__ == '__main__':
     fig = plt.figure(figsize=(18, 10))
     axes = fig.subplots(1, 3)
     world, world_traj, state = axes
+    world_traj.invert_yaxis()
     fig.show()
 
     episode = np.load('episode_sdf.npy')
@@ -72,7 +73,9 @@ if __name__ == '__main__':
     # list of sample indices
     grid = geo.grid_sample(*episode.shape[1:3], grid_spacing=16, pad=6)
 
-    for timestep in range(70, len(trajectory)-1):
+    start = 70
+
+    for timestep in range(start, len(trajectory)-1):
 
         state0 = episode_state[timestep]
         t0 = trajectory[timestep]
@@ -83,7 +86,7 @@ if __name__ == '__main__':
         draw_oriented_scan(t0, color=[0, 0, 1.])
         print(f'timestep: {timestep}')
 
-        for _ in range(6):
+        for _ in range(1):
 
             # project t0 sample index to t1 and filter points in the reference grid
             grid_t0, grid_t1 = geo.project_and_clip_sample_indices(grid, t0, t1)
@@ -94,14 +97,26 @@ if __name__ == '__main__':
 
             # project key-points to world space and clip key-points outside the scan overlap
             t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0, t1)
+            rms_before = icp.rms(t1_kp_w, t0_kp_w)
+
+            # filter non unique key-points
+            unique = geo.naive_unique(t0_kp_w)
+            t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
+            unique = geo.naive_unique(t1_kp_w)
+            t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
 
             # compute alignment and update the t1 frame
-            R, t = icp.icp(t1_kp_w, t0_kp_w)
+            R, t, t1_kp_w, t0_kp_w, error = icp.ransac_icp(t1_kp_w, t0_kp_w, k=12, n=7)
+            print(f'rms_before {rms_before},  rms_after: {error}')
 
             t1.t += t
             t1.R = np.matmul(R, t1.R)
 
-        print(icp.rms(t1_kp_w, t0_kp_w))
-        draw()
+        #draw(0.01)
 
+    traj_pose = np.stack([s.M for s in trajectory])
+    i = 0
+    np.save(f'data/ep{i}_pose', traj_pose[start:])
+    np.save(f'data/ep{i}_sdf', episode[start:])
+    np.save(f'data/ep{i}_state', episode_state[start:])
     plt.show()
