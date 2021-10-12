@@ -3,6 +3,11 @@ from numpy.linalg import svd
 import numpy.random
 
 
+"""
+Iterative closes point algorithms 
+"""
+
+
 def rms(source, target):
     return np.sum((source - target) ** 2) / source.shape[1]
 

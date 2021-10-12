@@ -5,6 +5,10 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 from pyglet.window import key
 
+"""
+Drive a car around the track and generate a dataset
+"""
+
 a = np.array([0.0, 0.0, 0.0])
 
 
@@ -31,6 +35,7 @@ def key_release(k, mod):
         a[1] = 0
     if k == key.DOWN:
         a[2] = 0
+
 
 fig = plt.figure(figsize=(18, 10))
 axes = fig.subplots(1, 4)

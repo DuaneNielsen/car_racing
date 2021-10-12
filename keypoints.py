@@ -2,6 +2,11 @@ import cv2
 import numpy as np
 
 
+"""
+Extracts key-points from Signed Distance Field
+"""
+
+
 def gradient(img, dx, dy, ksize=5):
     deriv_filter = cv2.getDerivKernels(dx=dx, dy=dy, ksize=ksize, normalize=True)
     return cv2.sepFilter2D(img, -1, deriv_filter[0], deriv_filter[1])

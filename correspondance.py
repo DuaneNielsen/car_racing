@@ -3,6 +3,10 @@ import numpy as np
 import geometry as geo
 from keypoints import extract_kp
 
+"""
+Extract corresponding key-points from a Signed Distance Field 
+"""
+
 
 fig = plt.figure(figsize=(18, 10))
 axes = fig.subplots(1, 2)

@@ -3,6 +3,10 @@ import numpy as np
 from math import sin, cos, radians
 import icp
 
+"""
+Demo of ICP algo that aligns 2 lines
+"""
+
 
 def unstack(line):
     return line[0], line[1]

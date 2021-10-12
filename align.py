@@ -6,6 +6,10 @@ import icp
 import geometry as geo
 from keypoints import extract_kp
 
+"""
+Runs Iterative Closest Point, with RANSAC, on two Signed Distance Fields
+"""
+
 
 def draw_scan_in_world(scan, color):
     scan_v_wf = geo.transform_points(scan.M, scan.vertices)

@@ -1,5 +1,9 @@
 import numpy as np
 
+"""
+2D geometry library for managing key-points
+"""
+
 
 def R(theta):
     return np.array([
