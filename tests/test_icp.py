@@ -86,32 +86,9 @@ def kps(f0, f1):
     return geo.transform_points(f0.M, grid), geo.transform_points(f1.M, grid)
 
 
-def plot_odometry(gt_frames):
+def plot_odometry(gt_frames, icp_frames):
     fig = plt.figure()
     pos_plt, rot_plt, kp_plt = fig.subplots(3, 1)
-    print('')
-
-    icp_frames = [geo.Frame()]
-    for step in range(len(gt_frames) - 1):
-        f0 = icp_frames[step]
-        f1 = geo.Frame()
-        f1.t = f0.t.copy()
-        f1.R = f0.R.copy()
-        icp_frames += [f1]
-
-        kp_source, kp_target = kps(gt_frames[step], gt_frames[step + 1])
-
-        R, t, kp_t0, kp_t1, best_error = icp.ransac_icp(kp_source, kp_target, k=10, n=5, seed=105)
-        #t_rot = np.matmul(f1.R, -t) + 2 * t
-        print(f'error: {best_error}, t: {t.squeeze()}, R: {np.degrees(geo.theta(R))} t_rot: ')#{t_rot}')
-
-        # translate in the f1 reference frame as the above will return the relative transformation
-        f1.t = f1.t + np.matmul(f1.R, t)
-        f1.R = np.matmul(R, f1.R.copy())
-
-        kp_plt.clear()
-        kp_plt.scatter(kp_t0[0], kp_t0[1], color='blue')
-        kp_plt.scatter(kp_t1[0], kp_t1[1], color='red')
 
     pos = np.concatenate([frame.t for frame in icp_frames], axis=1)
     pos_gt = np.concatenate([frame.t for frame in gt_frames], axis=1)
@@ -125,7 +102,33 @@ def plot_odometry(gt_frames):
 
     pos_plt.legend()
     rot_plt.legend()
-    plt.show()
+    plt.pause(0.5)
+
+
+def align(gt_frames):
+
+    icp_frames = [geo.Frame()]
+    for step in range(len(gt_frames) - 1):
+        f0 = icp_frames[step]
+        f1 = geo.Frame()
+        f1.t = f0.t.copy()
+        f1.R = f0.R.copy()
+        icp_frames += [f1]
+
+        kp_source, kp_target = kps(gt_frames[step], gt_frames[step + 1])
+
+        R, t, kp_t0, kp_t1, best_error = icp.ransac_icp(kp_source, kp_target, k=10, n=5, seed=105)
+        print(f'error: {best_error}, t: {t.squeeze()}, R: {np.degrees(geo.theta(R))} t_rot: ')#{t_rot}')
+
+        # translate in the f1 reference frame as the above will return the relative transformation
+        f1.t = f1.t + np.matmul(f1.R, t)
+        f1.R = np.matmul(R, f1.R.copy())
+
+        # kp_plt.clear()
+        # kp_plt.scatter(kp_t0[0], kp_t0[1], color='blue')
+        # kp_plt.scatter(kp_t1[0], kp_t1[1], color='red')
+
+    return icp_frames
 
 
 def test_icp_alignment_x():
@@ -135,7 +138,11 @@ def test_icp_alignment_x():
 
     dx, dy, dtheta = 1.0, 0., np.radians(0.0)
     gt_frames = Generator().generate_trajectory(dx, dy, dtheta)
-    plot_odometry(gt_frames)
+    icp_frames = align(gt_frames)
+    plot_odometry(gt_frames, icp_frames)
+    for gt, icp in zip(gt_frames, icp_frames):
+        assert np.allclose(gt.t, icp.t)
+        assert np.allclose(gt.R, icp.R)
 
 
 def test_icp_alignment_y():
@@ -145,7 +152,11 @@ def test_icp_alignment_y():
 
     dx, dy, dtheta = 0., 1., np.radians(0.0)
     gt_frames = Generator().generate_trajectory(dx, dy, dtheta)
-    plot_odometry(gt_frames)
+    icp_frames = align(gt_frames)
+    plot_odometry(gt_frames, icp_frames)
+    for gt, icp in zip(gt_frames, icp_frames):
+        assert np.allclose(gt.t, icp.t)
+        assert np.allclose(gt.R, icp.R)
 
 
 def test_icp_alignment_xy():
@@ -155,7 +166,11 @@ def test_icp_alignment_xy():
 
     dx, dy, dtheta = 1., 1., np.radians(0.0)
     gt_frames = Generator().generate_trajectory(dx, dy, dtheta)
-    plot_odometry(gt_frames)
+    icp_frames = align(gt_frames)
+    plot_odometry(gt_frames, icp_frames)
+    for gt, icp in zip(gt_frames, icp_frames):
+        assert np.allclose(gt.t, icp.t)
+        assert np.allclose(gt.R, icp.R)
 
 
 def test_icp_alignment_R():
@@ -165,7 +180,11 @@ def test_icp_alignment_R():
 
     dx, dy, dtheta = 0., 0., np.radians(-45.0)
     gt_frames = Generator().generate_trajectory(dx, dy, dtheta)
-    plot_odometry(gt_frames)
+    icp_frames = align(gt_frames)
+    plot_odometry(gt_frames, icp_frames)
+    for gt, icp in zip(gt_frames, icp_frames):
+        assert np.allclose(gt.t, icp.t)
+        assert np.allclose(gt.R, icp.R)
 
 
 def test_icp_alignment_xR():
@@ -175,4 +194,8 @@ def test_icp_alignment_xR():
 
     dx, dy, dtheta = 1., 0., np.radians(45.0)
     gt_frames = Generator().generate_trajectory(dx, dy, dtheta)
-    plot_odometry(gt_frames)
+    icp_frames = align(gt_frames)
+    plot_odometry(gt_frames, icp_frames)
+    for gt, icp in zip(gt_frames, icp_frames):
+        assert np.allclose(gt.t, icp.t)
+        assert np.allclose(gt.R, icp.R)
