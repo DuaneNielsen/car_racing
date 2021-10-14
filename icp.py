@@ -21,7 +21,8 @@ def icp(source, target):
     :param target: corresponding set of target points, D, N
     :return: rotation matrix, translation from Source -> Target
 
-    note: the translation output by this function already accounts for the rotation
+    to apply, translate first, then rotate
+
     """
     _, N = source.shape
 
@@ -57,8 +58,8 @@ def ransac_sample(source, target, k, n, seed=None):
     return source, target
 
 
-def ransac_icp(source, target, k, n):
-    source, target = ransac_sample(source, target, k, n)
+def ransac_icp(source, target, k, n, seed=None):
+    source, target = ransac_sample(source, target, k, n, seed)
 
     best_error = np.inf
     best_R = None
@@ -73,3 +74,17 @@ def ransac_icp(source, target, k, n):
             best_t = t
             best_k = k
     return best_R, best_t, source[best_k], target[best_k], best_error
+
+
+# def ransac_icp_iterate(source, target, k, n, iterations=3, seed=None):
+#     final_t = np.zeros((2, 1))
+#     final_R = np.eye(2)
+#     kp_t0, kp_t1, best_error = None, None, None
+#     for _ in range(iterations):
+#         R, t, kp_t0, kp_t1, best_error = ransac_icp(source, target, k, n, seed)
+#         source = np.matmul(R, source + t)
+#         final_t = final_t + np.matmul(final_R.T, t)
+#         print('')
+#         print(f'final_t: {final_t} final_R: {np.degrees(np.arccos(R[0, 0]))}')
+#
+#     return final_R, final_t, kp_t0, kp_t1, best_error

@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.linalg import norm
 
 """
 2D geometry library for managing key-points
@@ -10,6 +11,13 @@ def R(theta):
         [np.cos(theta), np.sin(theta)],
         [-np.sin(theta), np.cos(theta)]
     ])
+
+
+def theta(R):
+    x = np.array([1.0, 0.]).reshape(2, 1)
+    x = np.matmul(R, x)
+    x = x / norm(x)
+    return np.arccos(x[0, 0])
 
 
 def R_around_point(theta, x=0.0, y=0.0):
