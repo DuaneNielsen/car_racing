@@ -17,8 +17,8 @@ def icp(source, target):
 
     1 iteration of icp algorithm
 
-    :param source: set of source points, D, N
-    :param target: corresponding set of target points, D, N
+    :param source: set of source points, D, N in the source frame
+    :param target: corresponding set of target points, D, N in the target frame
     :return: rotation matrix, translation from Source -> Target
 
     to apply, translate first, then rotate
@@ -49,7 +49,10 @@ def ransac_sample(source, target, k, n, seed=None):
     rng = numpy.random.default_rng(seed)
     samples = []
     for _ in range(k):
-        samples += [rng.choice(N, n, replace=False)]
+        try:
+            samples += [rng.choice(N, n, replace=False)]
+        except ValueError:
+            print(f'tried to draw {n} samples from {N} points and failed')
     samples = np.concatenate(samples)
     source = source[:, samples].reshape(2, n, k)
     source = np.moveaxis(source, 2, 0)

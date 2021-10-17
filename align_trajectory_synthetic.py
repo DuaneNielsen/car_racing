@@ -66,25 +66,63 @@ def draw(delay=0.05):
     # plt.pause(delay)
 
     #draw_scan(delay)
+    state.clear()
     state.imshow(state0)
+    state.scatter(t1_kp[0], t1_kp[1])
     #world.scatter(t0_kp_w[0], t0_kp_w[1], label='scan t0')
     #world.scatter(t1_kp_w[0], t1_kp_w[1], label='scan t1')
 
+    # draw gt vs track
     scatter_pos.scatter(gt_pos[0], gt_pos[1], color='red')
     scatter_pos.scatter(t0.y, t0.x, color='blue')
-    scatter_angle.scatter(timestep, gt_pos[2], color='red')
+    scatter_angle.scatter(timestep, -gt_pos[2], color='red')
     scatter_angle.scatter(timestep, t0.theta, color='blue')
     error_plt.scatter(timestep, error, color='blue')
     #world.legend()
     plt.pause(delay)
 
 
+def gt_frame(x, y, theta, h=30, w=40):
+    world_grid = geo.grid_sample(500, 500, grid_spacing=10)
+    scan = geo.Scan(h, w, x=x, y=y, theta=theta)
+    features_in_scan = geo.inside(world_grid, geo.transform_points(scan.M, scan.vertices))
+    scan_features = world_grid[:, features_in_scan]
+    image = geo.transform_points(scan.inv_M, scan_features)
+    scan.image = image
+    return scan
+
+
+def gt_images(gt, h, w):
+    gridf0 = geo.grid_sample(h, w, 12, pad=2)
+    R = geo.R(gt[2])
+    gridf1 = np.matmul(R, gridf0) + gt[0:2].reshape(2, 1)
+    return gridf0, gridf1
+
+
+def plot_geo_diag(ax, kp0, kp1):
+    ax.clear()
+    ax.scatter(kp0[0], kp0[1])
+    ax.scatter(kp1[0], kp1[1])
+    centroid_t0 = kp0.mean(axis=1)
+    centroid_t1 = kp1.mean(axis=1)
+    ax.plot([0, centroid_t0[0]],  [0, centroid_t0[1]])
+    ax.plot([centroid_t0[0], t[0]], [centroid_t0[1], t[1]])
+    ax.plot([0, t[0]], [0, t[1]])
+
+
+def plot_geo():
+    kp0 = geo.transform_points(t0.inv_M, t0_kp_w)
+    kp1 = geo.transform_points(t0.inv_M, t1_kp_w)
+    plot_geo_diag(f0_geo_plt, kp0, kp1)
+    plot_geo_diag(world_geo, t0_kp_w, t1_kp_w)
+
+
 if __name__ == '__main__':
 
     fig = plt.figure(figsize=(18, 10))
-    axes = fig.subplots(1, 7)
-    relative, world, world_traj, state, scatter_pos, scatter_angle, error_plt = axes
-    world_traj.invert_yaxis()
+    axes = fig.subplots(1, 6)
+    world_geo, f0_geo_plt, state, scatter_pos, scatter_angle, error_plt = axes
+    #world_traj.invert_yaxis()
     fig.show()
 
     episode = np.load('episode_sdf.npy')
@@ -93,16 +131,17 @@ if __name__ == '__main__':
 
     trajectory = [geo.Scan(*step.shape, step) for step in episode]
 
-    # list of sample indices
-    grid = geo.grid_sample(*episode.shape[1:3], grid_spacing=12, pad=6)
+    # list of sample indice
+    h, w = episode.shape[1:3]
+    grid = geo.grid_sample(h, w, grid_spacing=12, pad=6)
 
     filter_N_0 = grid.shape[1]
 
-    start = 70
+    start = 80
 
     # initialize t0 to be same as ground truth
-    trajectory[start].x = episode_gt[start, 1]
-    trajectory[start].y = episode_gt[start, 0]
+    trajectory[start].x = episode_gt[start, 0]
+    trajectory[start].y = episode_gt[start, 1]
     trajectory[start].theta = episode_gt[start, 2]
 
     for timestep in range(start, len(trajectory)-1):
@@ -126,8 +165,12 @@ if __name__ == '__main__':
             filter_N_project_and_clip = grid_t0.shape[1]
 
             # extract key-points by following signed vector gradients
-            t0_kp = extract_kp(t0.image, grid_t0, iterations=1)
-            t1_kp = extract_kp(t1.image, grid_t1, iterations=1)
+            #t0_kp_orig = extract_kp(t0.image, grid_t0, iterations=1)
+            #t1_kp_orig = extract_kp(t1.image, grid_t1, iterations=1)
+
+            #t0_kp, t1_kp = gt_fake_scans[timestep].image, gt_fake_scans[timestep+1].image
+
+            t0_kp, t1_kp = gt_images(gt, h, w)
 
             # project key-points to world space and clip key-points outside the scan overlap
             t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0, t1)
@@ -141,16 +184,24 @@ if __name__ == '__main__':
             t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
             filter_n_unique = t0_kp_w.shape[1]
 
-            # compute alignment and update the t1 frame
-            R, t, t1_kp_w, t2_kp_w, error = icp.ransac_icp(t1_kp_w, t0_kp_w, k=12, n=5)
+            t0_kp_t0, t1_kp_t1 = geo.transform_points(t0.inv_M, t0_kp_w), geo.transform_points(t1.inv_M, t1_kp_w)
 
-            t1.t = t1.t + np.matmul(t1.R, t)
+            kp_filters = f'start:{filter_N_0} proj:{filter_N_project_and_clip} intersect: {filter_n_intersect} ' \
+                         f'unique: {filter_n_unique}'
+            print(kp_filters)
+
+            # compute alignment and update the t1 frame
+            R, t, t1_kp_w, t0_kp_w, error = icp.ransac_icp(t1_kp_t1, t0_kp_t0, k=2, n=3)
+
+            plot_geo()
+            fig.canvas.draw()
+
+            t1.t = t1.t + t
             t1.R = np.matmul(R.T, t1.R)
 
             theta = np.arccos(R[0, 0])
-            kp_filters = f'start:{filter_N_0} proj:{filter_N_project_and_clip} intersect: {filter_n_intersect} ' \
-                         f'unique: {filter_n_unique}'
-            print(f'rms_before {rms_before},  rms_after: {error} t:{t.squeeze()} theta:{theta} {kp_filters}')
+
+            print(f'rms_before {rms_before},  rms_after: {error} t:{t.squeeze()} theta:{theta}')
 
         theta = np.array([np.arccos(t1.R[0, 0]) - np.arccos(t0.R[0, 0])])
         d_pose = np.concatenate([(t1.t - t0.t).squeeze(), theta])
