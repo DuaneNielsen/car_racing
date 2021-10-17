@@ -74,22 +74,13 @@ def draw(delay=0.05):
 
     # draw gt vs track
     scatter_pos.scatter(gt_pos[0], gt_pos[1], color='red')
-    scatter_pos.scatter(t0.y, t0.x, color='blue')
+    scatter_pos.scatter(t0.x, t0.y, color='blue')
     scatter_angle.scatter(timestep, -gt_pos[2], color='red')
     scatter_angle.scatter(timestep, t0.theta, color='blue')
     error_plt.scatter(timestep, error, color='blue')
     #world.legend()
     plt.pause(delay)
 
-
-def gt_frame(x, y, theta, h=30, w=40):
-    world_grid = geo.grid_sample(500, 500, grid_spacing=10)
-    scan = geo.Scan(h, w, x=x, y=y, theta=theta)
-    features_in_scan = geo.inside(world_grid, geo.transform_points(scan.M, scan.vertices))
-    scan_features = world_grid[:, features_in_scan]
-    image = geo.transform_points(scan.inv_M, scan_features)
-    scan.image = image
-    return scan
 
 
 def gt_images(gt, h, w):
@@ -111,10 +102,10 @@ def plot_geo_diag(ax, kp0, kp1):
 
 
 def plot_geo():
-    kp0 = geo.transform_points(t0.inv_M, t0_kp_w)
-    kp1 = geo.transform_points(t0.inv_M, t1_kp_w)
-    plot_geo_diag(f0_geo_plt, kp0, kp1)
-    plot_geo_diag(world_geo, t0_kp_w, t1_kp_w)
+    kp0_w = geo.transform_points(t0.inv_M, t0_kp_t0)
+    kp1_w = geo.transform_points(t1.inv_M, t1_kp_t1)
+    plot_geo_diag(f0_geo_plt, t0_kp_t0, t1_kp_t1)
+    plot_geo_diag(world_geo, kp0_w, kp1_w)
 
 
 if __name__ == '__main__':
@@ -137,7 +128,7 @@ if __name__ == '__main__':
 
     filter_N_0 = grid.shape[1]
 
-    start = 80
+    start = 140
 
     # initialize t0 to be same as ground truth
     trajectory[start].x = episode_gt[start, 0]
@@ -191,13 +182,14 @@ if __name__ == '__main__':
             print(kp_filters)
 
             # compute alignment and update the t1 frame
-            R, t, t1_kp_w, t0_kp_w, error = icp.ransac_icp(t1_kp_t1, t0_kp_t0, k=2, n=3)
+            R, t, t0_kp_t0, t1_kp_t1, error = icp.ransac_icp(t0_kp_t0, t1_kp_t1, k=2, n=3)
 
             plot_geo()
             fig.canvas.draw()
 
+            #t1.t = t1.t + np.matmul(R, t)
             t1.t = t1.t + t
-            t1.R = np.matmul(R.T, t1.R)
+            t1.R = np.matmul(R, t1.R)
 
             theta = np.arccos(R[0, 0])
 

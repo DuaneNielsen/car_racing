@@ -71,7 +71,7 @@ def draw(delay=0.05):
     #world.scatter(t1_kp_w[0], t1_kp_w[1], label='scan t1')
 
     scatter_pos.scatter(gt_pos[0], gt_pos[1], color='red')
-    scatter_pos.scatter(t0.y, t0.x, color='blue')
+    scatter_pos.scatter(t0.x, t0.y, color='blue')
     scatter_angle.scatter(timestep, gt_pos[2], color='red')
     scatter_angle.scatter(timestep, t0.theta, color='blue')
     error_plt.scatter(timestep, error, color='blue')
@@ -101,8 +101,8 @@ if __name__ == '__main__':
     start = 70
 
     # initialize t0 to be same as ground truth
-    trajectory[start].x = episode_gt[start, 1]
-    trajectory[start].y = episode_gt[start, 0]
+    trajectory[start].x = episode_gt[start, 0]
+    trajectory[start].y = episode_gt[start, 1]
     trajectory[start].theta = episode_gt[start, 2]
 
     for timestep in range(start, len(trajectory)-1):
@@ -110,15 +110,15 @@ if __name__ == '__main__':
         state0 = episode_state[timestep]
         t0 = trajectory[timestep]
         t1 = trajectory[timestep + 1]
-        t1.R = t0.R
-        t1.t = t0.t
+        t1.R = t0.R.copy()
+        t1.t = t0.t.copy()
         gt_pos = episode_gt[timestep]
         gt = episode_gt[timestep + 1] - episode_gt[timestep]
 
         #draw_oriented_scan(t0, color=[0, 0, 1.])
         print(f'timestep: {timestep}')
 
-        for _ in range(1):
+        for _ in range(3):
 
             # project t0 sample index to t1 and filter points in the reference grid
             grid_t0, grid_t1 = geo.project_and_clip_sample_indices(grid, t0, t1)
@@ -126,8 +126,8 @@ if __name__ == '__main__':
             filter_N_project_and_clip = grid_t0.shape[1]
 
             # extract key-points by following signed vector gradients
-            t0_kp = extract_kp(t0.image, grid_t0, iterations=1)
-            t1_kp = extract_kp(t1.image, grid_t1, iterations=1)
+            t0_kp = extract_kp(t0.image, grid_t0, iterations=2)
+            t1_kp = extract_kp(t1.image, grid_t1, iterations=2)
 
             # project key-points to world space and clip key-points outside the scan overlap
             t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0, t1)
@@ -141,11 +141,13 @@ if __name__ == '__main__':
             t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
             filter_n_unique = t0_kp_w.shape[1]
 
-            # compute alignment and update the t1 frame
-            R, t, t1_kp_w, t2_kp_w, error = icp.ransac_icp(t1_kp_w, t0_kp_w, k=12, n=5)
+            t0_kp_t0, t1_kp_t1 = geo.transform_points(t0.inv_M, t0_kp_w), geo.transform_points(t1.inv_M, t1_kp_w)
 
-            t1.t = t1.t + np.matmul(t1.R, t)
-            t1.R = np.matmul(R.T, t1.R)
+            # compute alignment and update the t1 frame
+            R, t, t0_kp_t0, t1_kp_t1, error = icp.ransac_icp(t0_kp_t0, t1_kp_t1, k=16, n=5)
+
+            t1.t = t1.t + t
+            t1.R = np.matmul(R, t1.R)
 
             theta = np.arccos(R[0, 0])
             kp_filters = f'start:{filter_N_0} proj:{filter_N_project_and_clip} intersect: {filter_n_intersect} ' \
