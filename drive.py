@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 from pyglet.window import key
+import env
 
 """
 Drive a car around the track and generate a dataset
@@ -42,7 +43,7 @@ axes = fig.subplots(1, 4)
 raw_plot, segment_plot, gradient_plot, sdf_plot = axes
 fig.show()
 
-env = gym.make('CarRacing-v0')
+env = gym.make('CarRacing-v1')
 state, done = env.reset(), False
 action = env.action_space.sample()
 env.render()
@@ -51,9 +52,11 @@ env.viewer.window.on_key_release = key_release
 
 episode_sdf = []
 episode_state = []
+episode_gt = []
 
 while not done:
     state, reward, done, info = env.step(a)
+    print(info)
     # action = env.action_space.sample()
     # action[1], action[2] = 0.5, 0.0  # gas, brake
 
@@ -82,9 +85,12 @@ while not done:
     fig.canvas.draw()
     episode_sdf += [sdf]
     episode_state += [state]
+    x, y, theta = info['pos']
+    episode_gt += [np.array([x, y, theta])]
     if len(episode_sdf) > 300:
         break
 
 
 np.save('episode_sdf', np.stack(episode_sdf))
 np.save('episode_state', np.stack(episode_state))
+np.save('episode_gt', np.stack(episode_gt))

@@ -76,15 +76,16 @@ def ransac_icp(source, target, k, n, seed=None):
     return best_R, best_t, source[best_k], target[best_k], best_error
 
 
-# def ransac_icp_iterate(source, target, k, n, iterations=3, seed=None):
-#     final_t = np.zeros((2, 1))
-#     final_R = np.eye(2)
-#     kp_t0, kp_t1, best_error = None, None, None
-#     for _ in range(iterations):
-#         R, t, kp_t0, kp_t1, best_error = ransac_icp(source, target, k, n, seed)
-#         source = np.matmul(R, source + t)
-#         final_t = final_t + np.matmul(final_R.T, t)
-#         print('')
-#         print(f'final_t: {final_t} final_R: {np.degrees(np.arccos(R[0, 0]))}')
-#
-#     return final_R, final_t, kp_t0, kp_t1, best_error
+def ransac_icp_iterate(source, target, k, n, iterations=3, seed=None):
+    t = np.zeros((2, 1))
+    R = np.eye(2)
+    kp_t0, kp_t1, best_error = None, None, None
+    for _ in range(iterations):
+        src = np.matmul(R, source + t)
+        dR, dt, kp_t0, kp_t1, best_error = ransac_icp(src, target, k, n, seed)
+        t += dt
+        R = np.matmul(dR, R)
+        print('')
+        print(f't: {t.squeeze()} R: {np.degrees(np.arccos(R[0, 0]))}')
+
+    return R, t, kp_t0, kp_t1, best_error

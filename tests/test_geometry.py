@@ -1,6 +1,7 @@
 import numpy as np
 import geometry as geo
-
+from matplotlib import pyplot as plt
+from matplotlib.patches import Polygon
 
 tri = np.array([
     [0, 0],
