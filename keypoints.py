@@ -48,3 +48,21 @@ def extract_kp(src_sdf, sample_index, iterations=2):
         sample_index = np.round(np.stack([src_x_c, src_y_c])).astype(int)
 
     return sample_index
+
+
+def extract_cv2_kp(extractor, query, train, match_metric=cv2.NORM_HAMMING):
+    query_keypoints, query_descriptors = extractor.detectAndCompute(query, None)
+    train_keypoints, train_descriptors = extractor.detectAndCompute(train, None)
+    bf = cv2.BFMatcher(match_metric, crossCheck=True)
+    matches = bf.match(query_descriptors, train_descriptors)
+    matches = sorted(matches, key=lambda x: x.distance)
+    kp_0, kp_1 = [], []
+    for m in matches:
+        kp_0.append(np.array(query_keypoints[m.queryIdx].pt))
+        kp_1.append(np.array(train_keypoints[m.trainIdx].pt))
+    kp_0 = np.stack(kp_0, axis=1)
+    kp_1 = np.stack(kp_1, axis=1)
+    return kp_0, kp_1
+
+
+

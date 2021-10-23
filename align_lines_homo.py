@@ -2,6 +2,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 from math import sin, cos, radians
 import icp
+import geometry as geo
 
 """
 Demo of ICP algo that aligns 2 lines
@@ -37,8 +38,8 @@ source = np.matmul(se2(0.0, 0.1, radians(10.0)), homo(x, y))[0:2]
 ax.plot(*unstack(source))
 
 while icp.rms(source, target) > 0.001:
-    R, t = icp.icp(source, target)
-    source = np.matmul(R.T, source - t)
+    M = icp.icp_homo(source, target)
+    source = geo.transform_points(M, source)
 
     ax.clear()
     ax.plot(*unstack(source))

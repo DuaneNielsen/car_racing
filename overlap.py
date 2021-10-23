@@ -18,18 +18,18 @@ if __name__ == '__main__':
 
     grid = geo.grid_sample(f1.h, f1.w, grid_spacing=4, pad=2)
     M = np.matmul(f1.inv_M, f2.M)
-    grid_f2 = geo.transform_points(M, grid.T).T
+    grid_f2 = geo.transform_points(M, grid).T
 
-    r1.imshow(f1.i, origin='lower')
-    r2.imshow(f2.i, origin='lower')
+    r1.imshow(f1.image, origin='lower')
+    r2.imshow(f2.image, origin='lower')
     for i in range(len(grid)):
         r1.scatter(grid[i, 0], grid[i, 1])
         r2.scatter(grid_f2[i, 0], grid_f2[i, 1])
     r1.set_aspect('equal')
     r2.set_aspect('equal')
 
-    wf1 = geo.transform_points(f1.M, f1.vertices.T)
-    wf2 = geo.transform_points(f2.M, f2.vertices.T)
+    wf1 = geo.transform_points(f1.M, f1.vertices)
+    wf2 = geo.transform_points(f2.M, f2.vertices)
     inside = geo.inside(grid.T, wf2)
     wf1 = Polygon(wf1.T, color=[1, 0, 0], fill=False)
     wf2 = Polygon(wf2.T, color=[0, 1, 0], fill=False)

@@ -35,7 +35,7 @@ for _ in range(200):
     ax.set_ylim(-2.0, 2.0)
     ax.autoscale(False)
     R = geo.R(theta)
-    P = geo.transform_points(R_around_point_from_R(R, x, y), P_)
+    P = geo.transform_points(geo.R_around_point_Rt(R, np.array([x, y]).reshape(2, 1)), P_)
     ax.scatter(P[0], P[1])
     ax.scatter(x, y)
     theta += np.radians(3.0)

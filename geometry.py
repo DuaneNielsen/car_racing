@@ -53,6 +53,23 @@ def R_around_point_from_R(R, x, y):
     ])
 
 
+def R_around_point_Rt(R, t):
+    """
+    returns a homogenous rotation matrix around point x,y
+
+    :param R: rotation matrix
+    :param t: a point to rotate around
+    :return: homogenous transformation matrix
+    """
+    tx = t[0] - R[0, 0] * t[0] - R[0, 1] * t[1]
+    ty = t[1] - R[1, 0] * t[0] - R[1, 1] * t[1]
+    return np.array([
+        [R[0, 0], R[0, 1], tx[0]],
+        [R[1, 0], R[1, 1], ty[0]],
+        [0., 0., 1]
+    ])
+
+
 class Frame:
     def __init__(self):
         self._R = np.eye(2)
@@ -110,6 +127,11 @@ class Frame:
         M = np.concatenate((self._R, self._t), axis=1)
         return np.concatenate([M, np.array([0., 0., 1]).reshape(1, 3)], axis=0)
 
+    @M.setter
+    def M(self, M):
+        self._R = M[0:2, 0:2]
+        self._t = M[0:2, 2:]
+
     @property
     def inv_M(self):
         """
@@ -135,6 +157,10 @@ class Scan(Frame):
             [self.w-1, self.h-1],
             [0, self.h-1]
         ]).T
+        self.kp = None
+
+    def centroid(self):
+        return self.kp.mean(axis=1, keepdims=True)
 
 
 class Keypoints(Frame):

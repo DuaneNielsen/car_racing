@@ -4,84 +4,35 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import icp
 import geometry as geo
-from keypoints import extract_kp
+from keypoints import extract_kp, extract_cv2_kp
+import synthworld
 
 """
 Estimate the poses of an ordered list of scan images
 """
 
 
-def draw_scan_in_world(scan, color):
-    scan_v_wf = geo.transform_points(scan.M, scan.vertices)
-    world.add_patch(Polygon(scan_v_wf.T, color=color, fill=False))
-    world.autoscale_view()
+def draw_state(ax, state=None, kp=None, inliers=None):
+    ax.clear()
+    if state is not None:
+        ax.imshow(state)
+    if inliers is not None:
+        ax.scatter(kp[0, inliers], kp[1, inliers], color='blue')
+        ax.scatter(kp[0, ~inliers], kp[1, ~inliers], color='red')
+    else:
+        ax.scatter(kp[0], kp[1], color='blue')
 
 
-def draw_grid_in_world(grid, scan, label=None):
-    grid_w = geo.transform_points(scan.M, grid)
-    world.scatter(grid_w[0], grid_w[1], label=label)
-
-
-def draw_scan(delay):
-    h, w = 300, 300
-    world.clear()
-    world.set_aspect('equal')
-
-    world.imshow(cv2.warpAffine(t0.image, t0.M[0:2], (w, h)), cmap='cool')
-    draw_scan_in_world(t0, color=[0, 0, 1.])
-    draw_scan_in_world(t1, color=[0, 1, 0.])
-    plt.pause(delay)
-    world.imshow(cv2.warpAffine(t1.image, t1.M[0:2], (w, h)), cmap='cool')
-    draw_scan_in_world(t0, color=[0, 0, 1.])
-    draw_scan_in_world(t1, color=[0, 1, 0.])
-    plt.pause(delay)
-
-
-def draw_oriented_scan(scan, color):
-    scan_v_wf = geo.transform_points(scan.M, scan.vertices)
-    world_traj.add_patch(Polygon(scan_v_wf.T, color=color, fill=False))
-    world_traj.autoscale_view()
-    world_traj.set_aspect('equal')
-
-
-def draw_relative_frames(f0, kp0_w, f1, kp1_w, R, t):
-    relative.clear()
-    kp0 = geo.transform_points(f0.inv_M, kp0_w)
-    kp1 = geo.transform_points(f1.inv_M, kp1_w)
-    relative.scatter(kp0[0], kp0[1])
-    relative.scatter(kp1[0], kp1[1])
-    centroid = kp0.mean(axis=1)
-    relative.plot([centroid[0], centroid[0] + t[0]], [centroid[1], centroid[1] + t[1]])
-
-
-def draw(delay=0.05):
-
-    # draw_relative_frames(t0, t0_kp_w, t1, t1_kp_w, R, t)
-
-    # draw_scan(delay)
-    # draw_grid_in_world(grid_t0, t0, label='scan t0')
-    # draw_grid_in_world(grid_t1, t1, label='scan t1')
-    # world.legend()
-
-    # plt.pause(delay)
-
-    #draw_scan(delay)
-    state.clear()
-    state.imshow(state0)
-    state.scatter(t1_kp[0], t1_kp[1])
-    #world.scatter(t0_kp_w[0], t0_kp_w[1], label='scan t0')
-    #world.scatter(t1_kp_w[0], t1_kp_w[1], label='scan t1')
-
+def draw_gt(x, y, theta):
     # draw gt vs track
-    scatter_pos.scatter(gt_pos[0], gt_pos[1], color='red')
-    scatter_pos.scatter(t0.x, t0.y, color='blue')
-    scatter_angle.scatter(timestep, -gt_pos[2], color='red')
+    scatter_pos.scatter(x, y, color='red')
+    scatter_angle.scatter(timestep, theta, color='red')
+
+
+def draw_estimate():
+    scatter_pos.scatter(t1.x, t1.y, color='blue')
     scatter_angle.scatter(timestep, t0.theta, color='blue')
-    error_plt.scatter(timestep, error, color='blue')
-    #world.legend()
-    plt.pause(delay)
-
-
+    error_plt.scatter(timestep, info['rms'], color='blue')
 
 def gt_images(gt, h, w):
     gridf0 = geo.grid_sample(h, w, 12, pad=2)
@@ -90,29 +41,36 @@ def gt_images(gt, h, w):
     return gridf0, gridf1
 
 
-def plot_geo_diag(ax, kp0, kp1):
+def plot_geo_diag(ax, kp0, kp1, t=None):
     ax.clear()
-    ax.scatter(kp0[0], kp0[1])
-    ax.scatter(kp1[0], kp1[1])
+    ax.scatter(kp0[0], kp0[1], label='t0')
+    ax.scatter(kp1[0], kp1[1], label='t1')
     centroid_t0 = kp0.mean(axis=1)
     centroid_t1 = kp1.mean(axis=1)
-    ax.plot([0, centroid_t0[0]],  [0, centroid_t0[1]])
-    ax.plot([centroid_t0[0], t[0]], [centroid_t0[1], t[1]])
-    ax.plot([0, t[0]], [0, t[1]])
+    #ax.scatter(centroid_t0[0], centroid_t0[1], label='t0 centroid')
+    #ax.scatter(centroid_t1[0], centroid_t1[1], label='t1 centroid')
+    #ax.quiver(*centroid_t0, *centroid_t1)
+    if t is not None:
+        ax.plot(*np.stack([centroid_t0, centroid_t0 + t.squeeze()], axis=1))
+    else:
+        ax.plot(*np.stack([centroid_t0, centroid_t1], axis=1))
+    ax.legend()
 
 
-def plot_geo():
-    kp0_w = geo.transform_points(t0.inv_M, t0_kp_t0)
-    kp1_w = geo.transform_points(t1.inv_M, t1_kp_t1)
-    plot_geo_diag(f0_geo_plt, t0_kp_t0, t1_kp_t1)
-    plot_geo_diag(world_geo, kp0_w, kp1_w)
+def plot_geo(t0_kp_t0, t1_kp_t1):
+    # kp0_w = geo.transform_points(t0.inv_M, t0_kp_t0)
+    # kp1_w = geo.transform_points(t1.inv_M, t1_kp_t1)
+    plot_geo_diag(aligned, t0_kp_t0, t1_kp_t1)
+    #plot_geo_diag(world_geo, kp0_w, kp1_w)
 
 
 if __name__ == '__main__':
 
     fig = plt.figure(figsize=(18, 10))
-    axes = fig.subplots(1, 6)
-    world_geo, f0_geo_plt, state, scatter_pos, scatter_angle, error_plt = axes
+    axes = fig.subplots(3, 3)
+    state0_plt, state1_plt, _ = axes[0]
+    unaligned, aligned, _ = axes[1]
+    scatter_pos, scatter_angle, error_plt = axes[2]
     #world_traj.invert_yaxis()
     fig.show()
 
@@ -120,24 +78,37 @@ if __name__ == '__main__':
     episode_state = np.load('episode_state.npy')
     episode_gt = np.load('episode_gt.npy')
 
+    idx = np.arange(episode.shape[0]//3) * 3
+    start = 70 // 3
+
+    episode = episode[idx]
+    episode_gt = episode_gt[idx]
+    episode_state = episode_state[idx]
+
     trajectory = [geo.Scan(*step.shape, step) for step in episode]
 
     # list of sample indice
     h, w = episode.shape[1:3]
-    grid = geo.grid_sample(h, w, grid_spacing=12, pad=6)
+    grid = geo.grid_sample(h, w, grid_spacing=16, pad=6)
 
-    filter_N_0 = grid.shape[1]
 
-    start = 140
 
     # initialize t0 to be same as ground truth
     trajectory[start].x = episode_gt[start, 0]
     trajectory[start].y = episode_gt[start, 1]
     trajectory[start].theta = episode_gt[start, 2]
 
+    env = synthworld.World(x=200.0, y=200)
+    env.reset()
+    env.render()
+
+    trajectory[start].x = env.f.x
+    trajectory[start].y = env.f.y
+    trajectory[start].theta = env.f.theta
+
     for timestep in range(start, len(trajectory)-1):
 
-        state0 = episode_state[timestep]
+        state0, state1 = episode_state[timestep][:60], episode_state[timestep + 1][:60]
         t0 = trajectory[timestep]
         t1 = trajectory[timestep + 1]
         t1.R = t0.R
@@ -145,60 +116,42 @@ if __name__ == '__main__':
         gt_pos = episode_gt[timestep]
         gt = episode_gt[timestep + 1] - episode_gt[timestep]
 
-        #draw_oriented_scan(t0, color=[0, 0, 1.])
-        print(f'timestep: {timestep}')
+        t0_kp, t1_kp = env.step(0.5, 1.5, np.radians(1.0))
+        env.render()
+        plot_geo_diag(unaligned, t0_kp, t1_kp)
+        draw_gt(env.f.x, env.f.y, env.f.theta)
+        plt.pause(0.04)
 
         for _ in range(1):
 
-            # project t0 sample index to t1 and filter points in the reference grid
-            grid_t0, grid_t1 = geo.project_and_clip_sample_indices(grid, t0, t1)
 
-            filter_N_project_and_clip = grid_t0.shape[1]
+            # svf keypoints
+            # grid_t0, grid_t1 = geo.project_and_clip_sample_indices(grid, t0, t1)
+            # t0_kp = extract_kp(t0.image, grid_t0, iterations=1)
+            # t1_kp = extract_kp(t1.image, grid_t1, iterations=1)
 
-            # extract key-points by following signed vector gradients
-            #t0_kp_orig = extract_kp(t0.image, grid_t0, iterations=1)
-            #t1_kp_orig = extract_kp(t1.image, grid_t1, iterations=1)
+            # orb keypoints
+            # orb = cv2.ORB_create(nfeatures=100, patchSize=5, edgeThreshold=3, fastThreshold=1)
+            # sift = cv2.SIFT_create(nfeatures=100, contrastThreshold=0.01)
+            # t0_kp, t1_kp = extract_cv2_kp(sift, state0, state1, match_metric=cv2.CV_32F)
 
-            #t0_kp, t1_kp = gt_fake_scans[timestep].image, gt_fake_scans[timestep+1].image
+            # synthetic keypoints
+            #t0_kp, t1_kp = gt_images(gt, h, w)
 
-            t0_kp, t1_kp = gt_images(gt, h, w)
+            t1, R, t, info = icp.update_frame(t0, t1, t0_kp, t1_kp, k=10, n=3, threshold=12.0, d=1.0)
 
-            # project key-points to world space and clip key-points outside the scan overlap
-            t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0, t1)
-            rms_before = icp.rms(t1_kp_w, t0_kp_w)
-            filter_n_intersect = t0_kp_w.shape[1]
+            inliers, t0_kp, t1_kp = info['inliers'], info['t0_kp'], info['t1_kp']
+            draw_estimate()
 
-            # filter non unique key-points
-            unique = geo.naive_unique(t0_kp_w)
-            t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
-            unique = geo.naive_unique(t1_kp_w)
-            t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
-            filter_n_unique = t0_kp_w.shape[1]
+            draw_state(state0_plt, kp=t0_kp, inliers=inliers)
+            draw_state(state1_plt, kp=t1_kp, inliers=inliers)
+            #plot_geo_diag(unaligned, info['t0_kp'], info['t1_kp'])
+            plot_geo_diag(aligned, np.matmul(R, info['t0_kp'] + t), info['t1_kp'], t)
 
-            t0_kp_t0, t1_kp_t1 = geo.transform_points(t0.inv_M, t0_kp_w), geo.transform_points(t1.inv_M, t1_kp_w)
-
-            kp_filters = f'start:{filter_N_0} proj:{filter_N_project_and_clip} intersect: {filter_n_intersect} ' \
-                         f'unique: {filter_n_unique}'
-            print(kp_filters)
-
-            # compute alignment and update the t1 frame
-            R, t, t0_kp_t0, t1_kp_t1, error = icp.ransac_icp(t0_kp_t0, t1_kp_t1, k=2, n=3)
-
-            plot_geo()
-            fig.canvas.draw()
-
-            #t1.t = t1.t + np.matmul(R, t)
-            t1.t = t1.t + t
-            t1.R = np.matmul(R, t1.R)
-
-            theta = np.arccos(R[0, 0])
-
-            print(f'rms_before {rms_before},  rms_after: {error} t:{t.squeeze()} theta:{theta}')
 
         theta = np.array([np.arccos(t1.R[0, 0]) - np.arccos(t0.R[0, 0])])
-        d_pose = np.concatenate([(t1.t - t0.t).squeeze(), theta])
-
-        draw(0.01)
+        rms, rms_before, = info['rms'], info['rms_before']
+        print(f'timestep: {timestep}: rms: {rms} rms_before: {rms_before} t: {t.squeeze()} R: {geo.theta(R)}')
 
     traj_pose = np.stack([s.M for s in trajectory])
     i = 0
