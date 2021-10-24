@@ -8,16 +8,14 @@ import copy
 
 def draw_frame_relative(ax, frame, color):
     ax.add_patch(Polygon(frame.vertices.T, color=color, fill=False))
-    ax.add_patch(Circle(np.split(frame.centroid(), 2), radius=1, color=color, fill=False))
-    ax.scatter(frame.kp[0], frame.kp[1])
+    ax.add_patch(Circle(np.split(frame.centroid, 2), radius=1, color=color, fill=False))
+    ax.scatter(frame.kp[0], frame.kp[1], color=color)
 
 
 def draw_frame(ax, frame, color):
-    ax.add_patch(Polygon(geo.transform_points(frame.M, frame.vertices).T, color=color, fill=False))
-    centroid_w = geo.transform_points(frame.M, frame.centroid())
-    ax.add_patch(Circle((centroid_w[0], centroid_w[1]), radius=3, color=color, fill=False))
-    kp_w = geo.transform_points(frame.M, frame.kp)
-    ax.scatter(kp_w[0], kp_w[1])
+    ax.add_patch(Polygon(frame.vertices_w.T, color=color, fill=False))
+    ax.add_patch(Circle(np.split(frame.centroid_w, 2), radius=3, color=color, fill=False))
+    ax.scatter(*np.split(frame.kp_w, 2), color=color)
 
 
 def draw_vector(ax, p, v):
@@ -56,7 +54,8 @@ if __name__ == '__main__':
 
         f1_aligned = copy.copy(f1)
 
-        f1_aligned = icp.icp_homo(source_frame=f1_aligned, target_frame=f0)
+        M = icp.icp_homo(f1_aligned.kp_w, f0.kp_w)
+        f1_aligned.M = np.matmul(M, f1_aligned.M)
 
         [ax.clear() for ax in axes]
         draw_frame(world_plt, f0, 'blue')

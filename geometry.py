@@ -159,26 +159,21 @@ class Scan(Frame):
         ]).T
         self.kp = None
 
+    @property
+    def kp_w(self):
+        return transform_points(self.M, self.kp)
+
+    @property
     def centroid(self):
         return self.kp.mean(axis=1, keepdims=True)
 
+    @property
+    def centroid_w(self):
+        return transform_points(self.M, self.centroid)
 
-class Keypoints(Frame):
-    def __init__(self, P, center, R, scan):
-        """
-
-        :param P: 2, N kepoints in scan co-ordinate space
-        :param center: the centroid of the keypoints in scan co-ordinate space
-        :param R: rotation about the center
-        :param scan: the scan the keypoints are from
-        """
-        super().__init__()
-        self.P = P
-        self.t = center
-        self.R = R
-        self.scan = scan
-        self.height = 20
-        self.width = 30
+    @property
+    def vertices_w(self):
+        return transform_points(self.M, self.vertices)
 
 
 def grid_sample(h, w, grid_spacing, pad=0):
@@ -295,25 +290,17 @@ def project_and_clip_sample_indices(sample_indices, from_scan, to_scan):
     return sample_indices, sample_index_in_to_frame
 
 
-def project_and_clip_kp(t0_kp, t1_kp, t0_scan, t1_scan):
+def clip_intersection(t0_kp_world, t0_rect_world, t1_kp_world, t1_rect_world):
     """
     project corresponding key-points from each frame into world space
     and remove key-points that are outside the overlap of the scan areas
 
-    :param t0_kp: 2, N list of key-points in t0 frame
-    :param t1_kp: 2, N list of key-points in t1 frame
-    :param t0_scan: t0 scan
-    :param t1_scan: t1 scan
-    :return: t0_kp_world, t1_kp_world  clipped kp in world space
+    :param t0_kp_world: 2, N list of key-points in world frame
+    :param t0_rect_world: 2, N list of vertices of a bounding convex poly in world frame
+    :param t1_kp_world: 2, N list of key-points in world_frame
+    :param t1_rect_world: 2, N list of vertices of a bounding convex poly in world frame
+    :return: t0_kp_world, t1_kp_world clipped kp in world frame
     """
-
-    # project the kp into world space and align them
-    t0_kp_world = transform_points(t0_scan.M, t0_kp)
-    t1_kp_world = transform_points(t1_scan.M, t1_kp)
-
-    # project bounding boxes into the world frame
-    t0_rect_world = transform_points(t0_scan.M, t0_scan.vertices)
-    t1_rect_world = transform_points(t1_scan.M, t1_scan.vertices)
 
     # verify kp are inside the intersection
     t0_kp_inside_t0 = inside(t0_kp_world, t0_rect_world)
@@ -327,7 +314,7 @@ def project_and_clip_kp(t0_kp, t1_kp, t0_scan, t1_scan):
     t0_kp_world = t0_kp_world[:, intersection]
     t1_kp_world = t1_kp_world[:, intersection]
 
-    return t0_kp_world, t1_kp_world
+    return t0_kp_world, t1_kp_world, intersection
 
 
 def naive_unique(kp):

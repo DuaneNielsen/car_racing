@@ -2,7 +2,7 @@ import numpy as np
 from numpy.linalg import svd
 import numpy.random
 import geometry as geo
-
+from copy import copy
 
 """
 Iterative closes point algorithms 
@@ -15,6 +15,12 @@ def rms(source, target, reduce=True):
         return distance.mean()
     else:
         return distance
+
+
+def rms_frames(source, target, reduce=True):
+    source_kp_w = geo.transform_points(source.M, source.kp)
+    target_kp_w = geo.transform_points(target.M, target.kp)
+    return rms(source_kp_w, target_kp_w, reduce)
 
 
 def icp(source, target):
@@ -40,18 +46,18 @@ def icp(source, target):
     return R, t
 
 
-def icp_homo(source_frame, target_frame):
+def icp_homo(source, target):
     """
 
     1 iteration of icp algorithm
 
-    :param source_frame: source frame to align
-    :param target_frame: target frame to align with
-    :return: source_frame aligned to target frame
-    """
+    :param source_frame: source keypoints
+    :param target_frame: target keypoints
+    :return: homogenous transform that aligns source kp -> target kp
 
-    source = geo.transform_points(source_frame.M, source_frame.kp)
-    target = geo.transform_points(target_frame.M, target_frame.kp)
+    note: to apply to frame, put keypoints in world space, then the resulting
+    homo transform will also be in world space
+    """
 
     _, N = source.shape
 
@@ -67,9 +73,7 @@ def icp_homo(source_frame, target_frame):
     # translate source frame to target frame
     M[0:2, 2:] += target_center - source_center
 
-    source_frame.M = np.matmul(M, source_frame.M)
-
-    return source_frame
+    return M
 
 
 def ransac_sample(source, target, k, n, seed=None):
@@ -102,50 +106,49 @@ def ransac_icp(source, target, k, n, threshold, d, seed=None):
     source_sample, target_sample = ransac_sample(source, target, k, n, seed)
 
     best_error = np.inf
-    best_R = None
-    best_t = None
-    best_inliers = None
+    best_M = icp_homo(source, target)
+    best_inliers = np.ones(source.shape[1], dtype=np.bool8)
 
     for k in range(source_sample.shape[0]):
-        R, t = icp(source_sample[k], target_sample[k])
-        distance = rms(np.matmul(R, source + t), target, reduce=False)
+        M = icp_homo(source_sample[k], target_sample[k])
+        distance = rms(geo.transform_points(M, source), target, reduce=False)
         inlier_indx = distance < threshold
         N_inliers = np.count_nonzero(inlier_indx)
 
         if N_inliers > d:
             inlier_source, inlier_target = source[:, inlier_indx], target[:, inlier_indx]
-            R, t = icp(inlier_source, inlier_target)
-            error = rms(np.matmul(R, inlier_source + t), inlier_target)
+            M = icp_homo(inlier_source, inlier_target)
+            error = rms(geo.transform_points(M, inlier_source), inlier_target)
 
             if error < best_error:
                 best_error = error
-                best_R = R
-                best_t = t
+                best_M = M
                 best_inliers = inlier_indx
 
-    return best_R, best_t, best_inliers, best_error
+    return best_M, best_inliers, best_error
 
 
-def update_frame(t0, t1, t0_kp, t1_kp, k, n, threshold, d):
-
-    # project key-points to world space and clip key-points outside the scan overlap
-    t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0, t1)
-    rms_before = rms(t1_kp_w, t0_kp_w)
+def filter_kp(t0_kp_world, t0_rect_world, t1_kp_world, t1_rect_world):
+    t0_kp_w, t1_kp_w, intersection = geo.clip_intersection(t0_kp_world, t0_rect_world, t1_kp_world, t1_rect_world)
 
     # filter non unique key-points
-    unique = geo.naive_unique(t0_kp_w)
-    t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
-    unique = geo.naive_unique(t1_kp_w)
-    t0_kp_w, t1_kp_w = t0_kp_w[:, unique], t1_kp_w[:, unique]
+    unique_t0 = geo.naive_unique(t0_kp_world)
+    unique_t1 = geo.naive_unique(t1_kp_world)
 
-    t0_kp_t0, t1_kp_t1 = geo.transform_points(t0.inv_M, t0_kp_w), geo.transform_points(t1.inv_M, t1_kp_w)
+    filter = intersection & unique_t0 & unique_t1
+
+    return t0_kp_world[:, filter], t1_kp_world[:, filter], filter
+
+
+def update_frame(t0, t1, k, n, threshold, d):
+
+    # project key-points to world space and clip key-points outside the scan overlap
+    t0_kp_w, t1_kp_w, filter = filter_kp(t0.kp_w, t0.vertices_w, t1.kp_w, t1.vertices_w)
+
+    rms_before = rms(t1_kp_w, t0_kp_w)
 
     # compute alignment and update the t1 frame
-    R, t, inliers, error = ransac_icp(t0_kp_t0, t1_kp_t1, k=k, n=n, threshold=threshold, d=d)
+    M, inliers, error = ransac_icp(source=t1_kp_w, target=t0_kp_w, k=k, n=n, threshold=threshold, d=d)
+    t1.M = np.matmul(M, t1.M)
 
-    t1.t = t1.t + t
-    # t1.x += t[1]
-    # t1.y += t[0]
-    t1.R = np.matmul(R, t1.R)
-
-    return t1, R, t, {'rms': error, 'rms_before': rms_before, 't0_kp': t0_kp_t0, 't1_kp': t1_kp_t1, 'inliers': inliers}
+    return t1, M, inliers, {'rms': error, 'rms_before': rms_before}

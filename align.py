@@ -101,7 +101,7 @@ if __name__ == '__main__':
         t1_kp = extract_kp(t1, grid_t1)
 
         # project key-points to world space and clip key-points outside the scan overlap
-        t0_kp_w, t1_kp_w = geo.project_and_clip_kp(t0_kp, t1_kp, t0_scan, t1_scan)
+        t0_kp_w, t1_kp_w = geo.clip_intersection(t0_kp, t1_kp, t0_scan, t1_scan)
         rms_before = icp.rms(t1_kp_w, t0_kp_w)
 
         # filter non unique keypoints
