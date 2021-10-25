@@ -7,6 +7,7 @@ import geometry as geo
 class World:
     def __init__(self, h=60, w=90, x=0.0, y=0.0, theta=0.0):
         self.x_, self.y_, self.theta_ = x, y, theta
+        self.h, self.w = h, w
         fig = plt.figure()
         axes = fig.subplots(1, 2)
         self.world, self.model = axes
@@ -19,7 +20,7 @@ class World:
         self.f.x = self.x_
         self.f.y = self.y_
         self.f.theta = self.theta_
-        return self.f.image
+        return self.f.image, {'gt': np.ndarray[self.f.x, self.f.y, self.f.theta]}
 
     def render(self):
         self.model.clear(), self.world.clear()
@@ -36,9 +37,8 @@ class World:
             self.f.theta += dtheta
             inside_curr = geo.inside(self.grid, geo.transform_points(self.f.M, self.f.vertices))
             inside = inside_curr & inside_prev
-            image_prev = geo.transform_points(inv_M_prev, self.grid[:, inside])
             self.f.image = geo.transform_points(self.f.inv_M, self.grid[:, inside])
-            return image_prev, self.f.image
+            return self.f.image
 
 
 if __name__ == '__main__':

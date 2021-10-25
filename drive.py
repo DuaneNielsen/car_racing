@@ -87,10 +87,10 @@ while not done:
     episode_state += [state]
     x, y, theta = info['pos']
     episode_gt += [np.array([x, y, theta])]
-    if len(episode_sdf) > 300:
-        break
+    # if len(episode_sdf) > 300:
+    #     break
 
 
-np.save('episode_sdf', np.stack(episode_sdf))
-np.save('episode_state', np.stack(episode_state))
-np.save('episode_gt', np.stack(episode_gt))
+# np.save('episode_sdf', np.stack(episode_sdf))
+# np.save('episode_state', np.stack(episode_state))
+# np.save('episode_gt', np.stack(episode_gt))
