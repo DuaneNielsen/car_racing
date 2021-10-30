@@ -1,5 +1,7 @@
 import numpy as np
 from numpy.linalg import norm
+from matplotlib import pyplot as plt
+from matplotlib.patches import Polygon
 
 """
 2D geometry library for managing key-points
@@ -174,6 +176,37 @@ class Scan(Frame):
     @property
     def vertices_w(self):
         return transform_points(self.M, self.vertices)
+
+    def draw(self, ax, items=None, frame='self', color=None, label=None, offset=None):
+        """
+
+        :param ax:
+        :param items: 'box', 'kp', 'images'
+        :param frame: 'self' | 'world'
+        :param color:
+        :param label:
+        :return:
+        """
+        items = ['box', 'kp', 'image'] if items is None else items
+        offset = np.zeros((2, 1)) if offset is None else offset
+        if frame is 'self':
+            ax.invert_yaxis()
+            if 'box' in items:
+                ax.add_patch(Polygon((self.vertices + offset).T, color=color, fill=False))
+            if 'image' in items:
+                if self.image is not None:
+                    ax.imshow(self.image)
+            if 'kp' in items:
+                if self.kp is not None:
+                    ax.scatter(self.kp[0] + offset[0], self.kp[1] + offset[1], color=color, label=label)
+
+        if frame is 'world':
+            ax.invert_yaxis()
+            if 'box' in items:
+                ax.add_patch(Polygon((self.vertices_w + offset).T, color=color, fill=False))
+            if 'kp' in items:
+                if self.kp is not None:
+                    ax.scatter(self.kp_w[0] + offset[0], self.kp_w[1] + offset[1], color=color, label=label)
 
 
 def grid_sample(h, w, grid_spacing, pad=0):
