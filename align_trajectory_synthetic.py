@@ -6,6 +6,7 @@ import icp
 import geometry as geo
 from keypoints import extract_kp, extract_cv2_kp
 import synthworld
+import copy
 
 """
 Estimate the poses of an ordered list of scan images
@@ -70,11 +71,12 @@ def draw_readout(ax, text):
 
 
 class RecordingEnv:
-    def __init__(self, start=0, frameskip=0):
+    def __init__(self, i, start=0, frameskip=0):
         # load captured data
-        self.episode = np.load('episode_sdf.npy')
-        self.episode_state = np.load('episode_state.npy')
-        self.episode_gt = np.load('episode_gt.npy')
+        self.episode = np.load(f'data/ep{i}_sdf.npy')
+        self.episode_road = np.load(f'data/ep{i}_sdf_road.npy')
+        self.episode_state = np.load(f'data/ep{i}_state.npy')
+        self.episode_gt = np.load(f'data/ep{i}_gt.npy')
         self.episode_gt[:, 2] = -self.episode_gt[:, 2]
         self.h, self.w = self.episode.shape[1], self.episode.shape[2]
         self.start = start
@@ -87,14 +89,22 @@ class RecordingEnv:
 
     def reset(self):
         self.t = self.start
-        info = {'gt': self.episode_gt[self.t], 'state': self.episode_state[self.t]}
+        info = {'gt': self.episode_gt[self.t], 'state': self.episode_state[self.t], 'road': self.episode_road[self.t]}
         return self.episode[self.t], info
 
     def step(self):
         self.t += 1
         done = self.t == len(self.episode) - 1
-        info = {'gt': self.episode_gt[self.t], 'state': self.episode_state[self.t]}
+        info = {'gt': self.episode_gt[self.t], 'state': self.episode_state[self.t], 'road': self.episode_road[self.t]}
         return self.episode[self.t], done, info
+
+
+def make_grid(h, w, homo=False):
+    axis = []
+    axis += [*np.meshgrid(np.arange(h), np.arange(w))]
+    if homo:
+        axis += [np.ones_like(axis[0])]
+    return np.stack(axis, axis=2)
 
 
 if __name__ == '__main__':
@@ -109,7 +119,11 @@ if __name__ == '__main__':
     scatter_pos, scatter_angle, error_plt = axes[2]
     fig.show()
 
-    env = RecordingEnv(start=76)
+    fig_world = plt.figure()
+    world_plot = fig_world.subplots(1, 1)
+
+    i = 3
+    env = RecordingEnv(i, start=76)
     scan_image, extras = env.reset()
 
     x, y, theta = extras['gt'][0], extras['gt'][1], extras['gt'][2]
@@ -129,6 +143,12 @@ if __name__ == '__main__':
     timestep = 0
     trajectory, sdf, state = [t1.M], [t1.image], [t1_state]
 
+    # world array
+    world = np.full((2000, 2000), 4.0)
+    world_n = np.zeros_like(world)
+    world_origin = np.array([t1.x.item() + world.shape[0]//2, t1.y.item() + world.shape[1]//2])
+    max_h, min_h, max_w, min_w = 0, world.shape[1], 0, world.shape[0]
+
     while not done:
         t0_state = t1_state
         t0 = t1
@@ -138,6 +158,7 @@ if __name__ == '__main__':
             t1_state = extras['state']
 
         t1 = geo.Scan(env.h, env.w, image=t1_scan)
+        t1.road = extras['road']
         t1.R = t0.R
         t1.t = t0.t
         gt_pos = extras['gt']
@@ -157,7 +178,10 @@ if __name__ == '__main__':
             # sift = cv2.SIFT_create(nfeatures=100, contrastThreshold=0.01)
             # t0_kp, t1_kp = extract_cv2_kp(sift, state0, state1, match_metric=cv2.CV_32F)
 
-            plot_geo_diag(unaligned, t0.kp_w, t1.kp_w, t0, t1)
+            # unaligned.clear()
+            # t1.draw(unaligned, color='red', label='t1')
+            # t0.draw(unaligned, items=['box', 'kp'], color='blue', label='t0')
+
 
             # filter keypoints
             t0_kp_w, t1_kp_w, filter = icp.filter_kp(t0.kp_w, t0.vertices_w, t1.kp_w, t1.vertices_w)
@@ -167,27 +191,42 @@ if __name__ == '__main__':
             M, inliers, rms = icp.ransac_icp(source=t1_kp_w, target=t0_kp_w, k=19, n=3, threshold=3.0, d=5.0)
             t1.M = np.matmul(M, t1.M)
 
-            draw_stiched(stitched, M, t0, t1)
+            # draw_stiched(stitched, M, t0, t1)
+            # draw_state(state0_plt, t0.image, kp=geo.transform_points(t0.inv_M, t0_kp_w), inliers=inliers)
+            # draw_state(state1_plt, t1.image, kp=geo.transform_points(t1.inv_M, t1_kp_w), inliers=inliers)
+            # plot_geo_diag(aligned, t0.kp_w[:, filter][:, inliers], t1.kp_w[:, filter][:, inliers], t0, t1)
+            # draw_readout(text_plt, f'{timestep}')
+            # plt.pause(2.0)
+            # plt.pause(0.05)
 
-            draw_state(state0_plt, t0.image, kp=geo.transform_points(t0.inv_M, t0_kp_w), inliers=inliers)
-            draw_state(state1_plt, t1.image, kp=geo.transform_points(t1.inv_M, t1_kp_w), inliers=inliers)
-            plot_geo_diag(aligned, t0.kp_w[:, filter][:, inliers], t1.kp_w[:, filter][:, inliers], t0, t1)
-            draw_readout(text_plt, f'{timestep}')
-            #plt.pause(2.0)
-            plt.pause(0.05)
+        # write to world array
+        image = t1.road.clip(-4.0, 4.0)
+        mask = (image > -4.0) & (image < 4.0)
+        model_grid = make_grid(w, h, homo=True).reshape(h * w, 3).T
+        model_grid = model_grid[:, mask.reshape(h * w)]
+        model_grid_w = np.matmul(t1.M, model_grid)[0:2] + world_origin.reshape(2, 1)
+        model_grid_w = model_grid_w.round().astype(np.int64)
+        h_i, w_i = model_grid_w[0], model_grid_w[1]
+        n = world_n[w_i, h_i]
+        world[w_i, h_i] = ((world[w_i, h_i] * n + image[model_grid[1], model_grid[0]]) / (n + 1))
+        world_n[w_i, h_i] += 1.
 
-        draw_gt(*gt_pos)
-        draw_estimate(timestep, t1, rms)
+        world_plot.clear()
+        max_h, min_h = max(h_i.max(), max_h), min(h_i.min(), min_h)
+        max_w, min_w = max(w_i.max(), max_w), min(w_i.min(), min_w)
+        world_plot.imshow(world[min_w:max_w, min_h:max_h], cmap='cool')
+        kp = t1.kp_w + world_origin.reshape(2, 1)
+
+        #draw_gt(*gt_pos)
+        #draw_estimate(timestep, t1, rms)
         print(f'timestep: {timestep}: rms: {rms} rms_before: {rms_before} '
               f't: {M[0:2,2:].squeeze()} R: {geo.theta(M[0:2,0:2])}')
         trajectory.append(t1.M)
         sdf.append(t1.image)
         state.append(t1_state)
-
+        plt.pause(0.05)
+#
         timestep += 1
 
-    i = 0
     np.save(f'data/ep{i}_pose', np.stack(trajectory))
-    np.save(f'data/ep{i}_sdf', np.stack(sdf))
-    np.save(f'data/ep{i}_state', np.stack(state))
     plt.show()
