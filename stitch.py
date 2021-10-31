@@ -4,22 +4,23 @@ import cv2
 from matplotlib import pyplot as plt
 
 if __name__ == '__main__':
-    poses = np.load('data/ep0_pose.npy')
-    sdfs = np.load('data/ep0_sdf.npy')
-    states = np.load('data/ep0_state.npy')
+    i = 2
+    poses = np.load(f'data/ep{i}_pose.npy')
+    sdfs = np.load(f'data/ep{i}_sdf.npy')
+    states = np.load(f'data/ep{i}_state.npy')
 
-    h, w = (500, 400)
+    h, w = (400, 800)
     sdf_world = np.full((h, w), np.inf)
     state_world = np.full((h, w, 3), 255, dtype=np.uint8)
     offset = np.zeros((2, 3))
-    offset[0, 2] = 100.0
+    offset[0, 2] = 300.0
     offset[1, 2] = 300.0
 
     fig = plt.figure()
     axes = fig.subplots(2, 2)
     sdf_plot, state_plot = axes[0]
     sdf_world_ax, state_world_ax = axes[1]
-    update_freq = 10
+    update_freq = 100
 
     def update(ax, image, pose):
         ax.clear()
@@ -29,6 +30,7 @@ if __name__ == '__main__':
     def update_world(sdf, state, pose):
         warped = cv2.warpAffine(sdf, pose[0:2] + offset, (w, h), borderValue=255.0, borderMode=0)
         warped_state = cv2.warpAffine(state, pose[0:2] + offset, (w, h), borderValue=255, borderMode=0)
+        # sdf is zero on a surface.. so lets make full use of that
         mask = warped == 0
         sdf_world[mask] = warped[mask]
         state_world[mask] = warped_state[mask]
@@ -42,7 +44,7 @@ if __name__ == '__main__':
         #update_world(sdf_world_ax, sdf, pose)
         update_world(sdf, state[:60], pose)
 
-        if cnt % update_freq  == 0:
+        if cnt % update_freq == 0:
             plt.pause(0.05)
         cnt += 1
 
