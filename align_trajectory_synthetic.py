@@ -168,6 +168,7 @@ if __name__ == '__main__':
 
         # t0.kp, t1.kp = env.step(0.5, 1.5, np.radians(1.0))
         # env.render()
+        delta = np.eye(3)
 
         for _ in range(5):
 
@@ -193,6 +194,7 @@ if __name__ == '__main__':
             # compute alignment and update the t1 frame
             M, inliers, rms = icp.ransac_icp(source=t1_kp_w, target=t0_kp_w, k=19, n=3, threshold=3.0, d=5.0)
             t1.M = np.matmul(M, t1.M)
+            delta = np.matmul(M, delta)
 
             # draw_stiched(stitched, M, t0, t1)
             # draw_state(state0_plt, t0.image, kp=geo.transform_points(t0.inv_M, t0_kp_w), inliers=inliers)
@@ -225,7 +227,7 @@ if __name__ == '__main__':
         print(f'timestep: {timestep}: rms: {rms} rms_before: {rms_before} '
               f't: {M[0:2,2:].squeeze()} R: {geo.theta(M[0:2,0:2])}')
         trajectory.append(t1.M)
-        trajectory_d.append(M)
+        trajectory_d.append(delta)
         sdf.append(t1.image)
         state.append(t1_state)
         #plt.pause(0.05)
