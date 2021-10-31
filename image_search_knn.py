@@ -4,24 +4,26 @@ import keypoints as kps
 import geometry as geo
 from matplotlib import pyplot as plt
 
-i, query_set = 3, 2
-sdfs = np.load(f'data/ep{i}_sdf_road.npy')[70:]
-states = np.load(f'data/ep{i}_state.npy')[70:]
-sdfs_q = np.load(f'data/ep{query_set}_sdf_road.npy')[70:]
-states_q = np.load(f'data/ep{query_set}_state.npy')[70:]
-state = np.load(f'data/ep{i}_state.npy')
 
-N, h, w = sdfs.shape
-sample_i = geo.grid_sample(h, w, 12, pad=4)
+class Episode:
+    def __init__(self, i):
+        self.sdfs = np.load(f'data/ep{i}_sdf_road.npy')[70:]
+        self.states = np.load(f'data/ep{i}_state.npy')[70:]
+        self.N, self.h, self.w = self.sdfs.shape
+        sample_i = geo.grid_sample(self.h, self.w, 12, pad=4)
+        keypoints = []
+        for i, sdf in enumerate(self.sdfs):
+            keypoints.append(kps.extract_kp(sdf, sample_i, iterations=3))
+        self.kps = np.stack(keypoints)
+
+    def __len__(self):
+        return self.N
 
 
-keypoints = []
-for i, sdf in enumerate(sdfs):
-    keypoints.append(kps.extract_kp(sdf, sample_i, iterations=3))
-keypoints = np.stack(keypoints)
+memory_set, query_set = [Episode(5), Episode(6), Episode(7)], Episode(2)
 
 
-def knn(query, num_results=3):
+def knn(query, keypoints, num_results=3):
     distance = keypoints - query.reshape(1, *query.shape)
     distance = distance ** 2
     distance = distance.sum(axis=1)
@@ -37,22 +39,22 @@ results_ax = axes[0, 1:4]
 query_state_plt = axes[1, 0]
 results_state_ax = axes[1, 1:4]
 
-sdf_q = sdfs[0]
-
 skip = 0
-for sdf_q, state_q in zip(sdfs_q, states_q):
+for i in range(len(query_set)):
     skip += 1
     if skip % 3 != 0:
         continue
     for row in axes:
         for ax in row:
             ax.clear()
-    query_plt.imshow(sdf_q)
-    query_state_plt.imshow(state_q)
-    kp_q = kps.extract_kp(sdf_q, sample_i, iterations=3)
-    top_k = knn(kp_q, num_results=3)
-    for i, result_ax, result_state_ax in zip(top_k, results_ax, results_state_ax):
-        result_ax.imshow(sdfs[i])
-        result_state_ax.imshow(states[i])
+    query_plt.imshow(query_set.sdfs[i])
+    query_state_plt.imshow(query_set.states[i])
+    kp_q = query_set.kps[i]
+
+    for memory, result_ax, result_state_ax in zip(memory_set, results_ax, results_state_ax):
+        top_k = knn(kp_q, memory.kps, num_results=1)
+        j = top_k[0]
+        result_ax.imshow(memory.sdfs[j])
+        result_state_ax.imshow(memory.states[j])
     plt.pause(0.01)
 plt.show()
