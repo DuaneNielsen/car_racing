@@ -14,7 +14,7 @@ https://graphics.stanford.edu/papers/volrange/volrange.pdf
 
 if __name__ == '__main__':
 
-    i = 1
+    i = 2
     poses = torch.from_numpy(np.load(f'data/ep{i}_pose.npy')).float()
     sdfs = torch.from_numpy(np.load(f'data/ep{i}_sdf.npy')).float().permute(0, 2, 1)
     states = torch.from_numpy(np.load(f'data/ep{i}_state.npy'))
