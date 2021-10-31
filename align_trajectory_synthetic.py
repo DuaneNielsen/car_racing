@@ -6,7 +6,7 @@ import icp
 import geometry as geo
 from keypoints import extract_kp, extract_cv2_kp
 import synthworld
-import copy
+import argparse
 
 """
 Estimate the poses of an ordered list of scan images
@@ -110,20 +110,23 @@ def make_grid(h, w, homo=False):
 if __name__ == '__main__':
 
     # plotting
-    fig = plt.figure(figsize=(18, 10))
-    axes = fig.subplots(3, 3)
-    state0_plt, state1_plt, text_plt = axes[0]
-    unaligned, aligned, stitched = axes[1]
-    unaligned.set_aspect('equal')
-    aligned.set_aspect('equal')
-    scatter_pos, scatter_angle, error_plt = axes[2]
-    fig.show()
+    # fig = plt.figure(figsize=(18, 10))
+    # axes = fig.subplots(3, 3)
+    # state0_plt, state1_plt, text_plt = axes[0]
+    # unaligned, aligned, stitched = axes[1]
+    # unaligned.set_aspect('equal')
+    # aligned.set_aspect('equal')
+    # scatter_pos, scatter_angle, error_plt = axes[2]
+    # fig.show()
 
     fig_world = plt.figure()
     world_plot = fig_world.subplots(1, 1)
 
-    i = 3
-    env = RecordingEnv(i, start=76)
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument("-ep", "--episode", type=int)
+    args = parser.parse_args()
+
+    env = RecordingEnv(args.episode, start=0)
     scan_image, extras = env.reset()
 
     x, y, theta = extras['gt'][0], extras['gt'][1], extras['gt'][2]
@@ -141,7 +144,7 @@ if __name__ == '__main__':
     info = {}
     done = False
     timestep = 0
-    trajectory, sdf, state = [t1.M], [t1.image], [t1_state]
+    trajectory, trajectory_d, sdf, state = [t1.M], [np.eye(3)], [t1.image], [t1_state]
 
     # world array
     world = np.full((2000, 2000), 4.0)
@@ -222,11 +225,14 @@ if __name__ == '__main__':
         print(f'timestep: {timestep}: rms: {rms} rms_before: {rms_before} '
               f't: {M[0:2,2:].squeeze()} R: {geo.theta(M[0:2,0:2])}')
         trajectory.append(t1.M)
+        trajectory_d.append(M)
         sdf.append(t1.image)
         state.append(t1_state)
-        plt.pause(0.05)
+        #plt.pause(0.05)
 #
         timestep += 1
 
-    np.save(f'data/ep{i}_pose', np.stack(trajectory))
-    plt.show()
+    np.save(f'data/ep{args.episode}_map', world)
+    np.save(f'data/ep{args.episode}_pose', np.stack(trajectory))
+    np.save(f'data/ep{args.episode}_pose_d', np.stack(trajectory_d))
+    #plt.show()

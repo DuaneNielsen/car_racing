@@ -98,8 +98,8 @@ while not done:
     if len(episode_sdf) > 1600:
         break
 
-i = 3
-np.save(f'ep{i}_sdf', np.stack(episode_sdf))
-np.save(f'ep{i}_state', np.stack(episode_state))
-np.save(f'ep{i}_gt', np.stack(episode_gt))
-np.save(f'ep{i}_sdf_road', np.stack(episode_sdf_road))
+i = 1
+np.save(f'data/ep{i}_sdf', np.stack(episode_sdf))
+np.save(f'data/ep{i}_state', np.stack(episode_state))
+np.save(f'data/ep{i}_gt', np.stack(episode_gt))
+np.save(f'data/ep{i}_sdf_road', np.stack(episode_sdf_road))
