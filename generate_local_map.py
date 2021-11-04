@@ -5,6 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import cv2
 
+
 class Episode:
     def __init__(self, i):
         self.sdfs = np.load(f'data/ep{i}_sdf_road.npy')[70:]
@@ -12,6 +13,7 @@ class Episode:
         self.pose = np.load(f'data/ep{i}_pose.npy')[70:]
         self.pose_d = np.load(f'data/ep{i}_pose_d.npy')[70:]
         self.map = np.load(f'data/ep{i}_map.npy')
+        self.rms = np.load(f'data/ep{1}_error.npy')
         self.N, self.h, self.w = self.sdfs.shape
         sample_i = geo.grid_sample(self.h, self.w, 12, pad=4)
         keypoints = []
@@ -49,6 +51,21 @@ def make_grid(h, w, homo=False):
     return np.stack(axis, axis=2)
 
 
+def inverse(M):
+    inv = np.eye(3)
+    R = M[0:2, 0:2].T
+    inv[0:2, 0:2] = R
+    inv[0:2, 2] = - np.matmul(R, M[0:2, 2])
+    return inv
+
+
+def rotate_in_base_frame(M, t, R):
+    M[0:2, 2:] = M[0:2, 2:] - t
+    M = np.matmul(R, M)
+    M[0: 2, 2:] = M[0: 2, 2:] + t
+    return M
+
+
 fig = plt.figure()
 axes = fig.subplots(3, 4)
 query_plt = axes[0, 0]
@@ -57,17 +74,6 @@ query_state_plt = axes[1, 0]
 results_state_ax = axes[1, 1:4]
 query_map_ax = axes[2, 0]
 results_map_ax = axes[2, 1:4]
-
-# fig2 = plt.figure()
-# world_ax = fig2.subplots()
-#
-#
-# def draw_box(ax, episode, j, color='blue'):
-#     world_origin = np.array([episode.map.shape[0] // 2, episode.map.shape[1] // 2])
-#     verts_w = geo.transform_points(memory.pose[j], episode.vertices)[0:2] + world_origin.reshape(2, 1)
-#     ax.clear()
-#     ax.imshow(episode.map)
-#     ax.add_patch(Polygon(verts_w.T, color=color, fill=False))
 
 
 skip = 0
@@ -95,22 +101,27 @@ for i in range(len(query_set)):
         world_origin = np.array([world.shape[0] // 2, world.shape[1] // 2])
         max_h, min_h, max_w, min_w = 0, world.shape[1], 0, world.shape[0]
 
-        # initialize segment with the correct rotation
+        # to see from the query frame perspective, left multiply by the inverse
         delta = memory.pose[j]
-        delta[2, 0:1] = 0.0
-        initial_r = delta
+        delta_inv = inverse(delta)
+        delta = np.matmul(delta_inv, delta)
 
+        # recover map from previous trajectories
         for k in range(j, j+90):
-            # write to world array
+
             if k >= len(memory):
                 break
+
+            # break if error too large
+            if memory.rms[k] > 2.0:
+                break
+
             image = memory.sdfs[k].clip(-4.0, 4.0)
             mask = (image > -4.0) & (image < 4.0)
 
             model_grid = make_grid(memory.w, memory.h, homo=True).reshape(memory.h * memory.w, 3).T
             model_grid = model_grid[:, mask.reshape(memory.h * memory.w)]
 
-            #model_grid_w = np.matmul(memory.pose[k], model_grid)[0:2] + world_origin.reshape(2, 1)
             model_grid_w = np.matmul(delta, model_grid)[0:2] + world_origin.reshape(2, 1)
             model_grid_w = model_grid_w.round().astype(np.int64)
             h_i, w_i = model_grid_w[0], model_grid_w[1]
@@ -121,10 +132,7 @@ for i in range(len(query_set)):
             max_h, min_h = max(h_i.max(), max_h), min(h_i.min(), min_h)
             max_w, min_w = max(w_i.max(), max_w), min(w_i.min(), min_w)
 
-            delta = np.matmul(memory.pose_d[k], delta)
-            # result_map_ax.imshow(world[min_w:max_w, min_h:max_h], cmap='cool')
-            # draw_box(world_ax, memory, k)
-            # plt.pause(0.05)
+            delta = np.matmul(delta_inv, memory.pose[k])
 
         result_map_ax.clear()
         result_map_ax.imshow(world[min_w:max_w, min_h:max_h], cmap='cool')
