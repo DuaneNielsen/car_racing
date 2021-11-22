@@ -101,79 +101,133 @@ class VehicleTrajectoryObs:
         super().__init__()
         self.sdfs_road = jnp.load(f'data/ep{i}_sdf_road.npy')[start:].transpose(0, 2, 1)
         self.sdfs = jnp.load(f'data/ep{i}_sdf.npy')[start:].transpose(0, 2, 1)
-        self.states = jnp.load(f'data/ep{i}_state.npy')[start:, :60].transpose(0, 2, 1, 3)
+        self.states = jnp.load(f'data/ep{i}_state.npy')[start:, :86].transpose(0, 2, 1, 3)
         self.pose = jnp.load(f'data/ep{i}_pose.npy')[start:]
         self.pose_d = jnp.load(f'data/ep{i}_pose_d.npy')[start:]
         self.map = jnp.load(f'data/ep{i}_map.npy')
         self.rms = jnp.load(f'data/ep{i}_error.npy')[start:]
         self.N, self.w, self.h = self.sdfs.shape
         self.C = jnp.array([
-            [1., 0., 48.],
-            [0., 1., 86.],
+            [1., 0., 47.],
+            [0., 1., 70.],
             [0., 0., 1.]
         ])
         self.verts = jnp.array([[0., self.w, self.w, 0.], [0., 0., self.h, self.h], [1., 1., 1., 1.]])
         self.i = -1
-        self.grid = Grid(self.sdfs.shape[1:])
+        self.sdf_grid = Grid(self.sdfs.shape[1:])
+        self.state_grid = Grid(self.states.shape[1:3])
 
-    def __getitem__(self, item):
-        return self.sdfs[item], self.states[item], self.pose[item]
 
-    def __len__(self):
-        return self.N
+def bilinear_interpolate(map, sdf, M):
+    shape = sdf.shape[0:2]
+    grid_0, grid_1 = jnp.meshgrid(*[jnp.arange(d) for d in shape])
+    grid_0, grid_1 = grid_0.flatten(), grid_1.flatten()
+    source_index = jnp.stack([grid_0, grid_1, jnp.ones_like(grid_0)])
+    dest_index = jnp.matmul(M, source_index)[0:2]
+    rem = jnp.mod(dest_index, 1)
+    dest_index = dest_index.astype(int)
+    rem_x = rem[0]
+    rem_y = rem[1]
+    sdf = jnp.pad(sdf, mode='edge', pad_width=1)[1:, 1:]
+    floor_sdf = sdf[source_index[0], source_index[1]]
+    x_sdf = sdf[source_index[0] + 1, source_index[1]]
+    y_sdf = sdf[source_index[0], source_index[1] + 1]
+    map[dest_index[0], dest_index[1]] = floor_sdf * (1 - rem_x) + x_sdf * rem_x + floor_sdf * (1 - rem_y) + y_sdf * rem_y
+    return map
 
-    def __iter__(self):
-        self.i = -1
-        return self
 
-    def __next__(self):
-        self.i += 1
-        if self.i >= self.N:
-            raise StopIteration()
-        return self[self.i]
+class MapArray:
+    def __init__(self, shape):
+        self.map = np.zeros(shape)
+        self.N = np.zeros(shape, dtype=int)
+        self.xlim = (shape[0], 0)
+        self.ylim = (shape[1], 0)
+
+    def update(self, dest_index, source_index, sdf):
+        self.xlim = min(self.xlim[0], dest_index[1].min()), max(self.xlim[1], dest_index[1].max())
+        self.ylim = min(self.ylim[0], dest_index[0].min()), max(self.ylim[1], dest_index[0].max())
+        N = self.N[dest_index[0], dest_index[1]]
+        self.map[dest_index[0], dest_index[1]] = (self.map[dest_index[0], dest_index[1]] * N + sdf[source_index[0], source_index[1]]) / (N + 1)
+        self.N[dest_index[0], dest_index[1]] += 1
 
 
 class Plotter:
-    def __init__(self, lim):
-        self.fig = plt.figure(figsize=(12, 18))
-        gs = self.fig.add_gridspec(6, 4)
-        self.ax_sdf, self.ax_state = self.fig.add_subplot(gs[0:3, 3]), self.fig.add_subplot(gs[3:6, 3])
-        self.ax_map_sdf, self.ax_map_state = self.fig.add_subplot(gs[0:3, 0:3]), self.fig.add_subplot(gs[3:6, 0:3])
-        self.axes = [[self.ax_sdf, self.ax_state], [self.ax_map_sdf, self.ax_map_state]]
-        self.fig.show()
+    def __init__(self, lim, layout='default'):
         self.lim = lim
-        self.map = np.zeros((lim * 2, lim * 2))
-        self.map_state = np.zeros((lim * 2, lim * 2, 3), dtype=np.uint8)
+        self.map_sdf = MapArray((lim * 2, lim * 2))
+        self.map_road = MapArray((lim * 2, lim * 2))
+        self.map_state = MapArray((lim * 2, lim * 2, 3))
+
+        self.fig = plt.figure(figsize=(18, 12))
+
+        self.ax_sdf, self.ax_state, self.ax_road = None, None, None
+        self.ax_map_sdf, self.ax_map_state, self.ax_map_road = None, None, None
+
+        if layout == 'default':
+            gs = self.fig.add_gridspec(9, 4)
+            self.ax_sdf = self.fig.add_subplot(gs[0:3, 3])
+            self.ax_state = self.fig.add_subplot(gs[3:6, 3])
+            self.ax_road = self.fig.add_subplot(gs[6:9, 3])
+
+            self.ax_map_sdf = self.fig.add_subplot(gs[0:3, 0:3])
+            self.ax_map_state = self.fig.add_subplot(gs[3:6, 0:3])
+            self.ax_map_road = self.fig.add_subplot(gs[6:9, 0:3])
+
+        elif layout == 'sdf_map':
+            self.ax_map_sdf = self.fig.add_subplot(1, 1, 1)
+
+        elif layout == 'rgb_map':
+            self.ax_map_state = self.fig.add_subplot(1, 1, 1)
+
+        elif layout == 'road':
+            self.ax_map_road = self.fig.add_subplot(1, 1, 1)
+
+        self.axes = [[self.ax_sdf, self.ax_state, self.ax_road], [self.ax_map_sdf, self.ax_map_state, self.ax_map_road]]
+        self.fig.show()
 
     def clear(self):
         for row in self.axes:
             for ax in row:
-                ax.clear()
-
-    def draw_img(self, ax, img):
-        ax.imshow(img, origin='lower')
+                if ax is not None:
+                    ax.clear()
 
     def draw_maps(self):
-        self.ax_map_sdf.imshow(self.map, origin='lower')
-        self.ax_map_state.imshow(self.map_state, origin='lower')
+        if self.ax_map_sdf is not None:
+            self.ax_map_sdf.imshow(self.map_sdf.map, origin='lower')
+            self.ax_map_sdf.set_aspect('equal')
+            self.ax_map_sdf.set_xlim(self.map_sdf.xlim)
+            self.ax_map_sdf.set_ylim(self.map_sdf.ylim)
+
+        if self.ax_map_state is not None:
+            self.ax_map_state.imshow(np.floor(self.map_state.map).astype(np.uint8), origin='lower')
+            self.ax_map_state.set_aspect('equal')
+            self.ax_map_state.set_xlim(self.map_state.xlim)
+            self.ax_map_state.set_ylim(self.map_state.ylim)
+
+        if self.ax_map_road is not None:
+            self.ax_map_road.imshow(self.map_road.map, origin='lower')
+            self.ax_map_road.set_aspect('equal')
+            self.ax_map_road.set_xlim(self.map_road.xlim)
+            self.ax_map_road.set_ylim(self.map_road.ylim)
+
+    def draw_img(self, ax, img):
+        if ax is not None:
+            ax.imshow(img, origin='lower')
 
     def draw_poly(self, ax, verts, color='blue'):
-        ax.add_patch(Polygon(verts[0:2].T, color=color, fill=False))
+        if ax is not None:
+            ax.add_patch(Polygon(verts[0:2].T, color=color, fill=False))
 
     def draw_points(self, ax, points):
-        ax.scatter(points[0], points[1])
+        if ax is not None:
+            ax.scatter(points[0], points[1])
 
     def update(self):
-
-        for ax in self.axes[1]:
-            ax.set_aspect('equal')
-            ax.set_xlim((0, self.lim))
-            ax.set_ylim((0, self.lim))
         self.fig.canvas.draw()
 
 
 if __name__ == '__main__':
-    plot = Plotter(lim=1000)
+    plot = Plotter(lim=1000, layout='road')
     assert jnp.allclose(jnp.eye(3),
                         jnp.matmul(
                             M(jnp.array([1., 1., jnp.pi / 8])),
@@ -181,24 +235,27 @@ if __name__ == '__main__':
                         ),
                         atol=1e-7)
 
-    trj = VehicleTrajectoryObs(8, start=500)
+    trj = VehicleTrajectoryObs(8, start=70)
     start = invert_M(trj.pose[0])
 
-    for sdf, state, pose in trj:
+    for sdf, sdf_road, state, pose in zip(trj.sdfs, trj.sdfs_road, trj.states, trj.pose):
         plot.clear()
 
         # show images
         plot.draw_img(plot.ax_sdf, sdf)
         plot.draw_img(plot.ax_state, state)
+        plot.draw_img(plot.ax_road, sdf_road)
 
         # center pose in map
         pose = jnp.matmul(start, pose)
         pose = jnp.matmul(M(jnp.array([plot.lim / 2, plot.lim / 2, 0.])), pose)
 
         # write to map
-        dest_index, source_index = trj.grid.index(pose), trj.grid.index()
-        plot.map[dest_index[0], dest_index[1]] = sdf[source_index[0], source_index[1]]
-        plot.map_state[dest_index[0], dest_index[1]] = state[source_index[0], source_index[1]]
+        dest_index, source_index = trj.sdf_grid.index(pose), trj.sdf_grid.index()
+        plot.map_sdf.update(dest_index, source_index, sdf)
+        plot.map_road.update(dest_index, source_index, sdf_road)
+        dest_index, source_index = trj.state_grid.index(pose), trj.state_grid.index()
+        plot.map_state.update(dest_index, source_index, state)
 
         # the pose data is in h, w space, but we want the verts in x, y space
         # so we must transpose the co-ordinates
