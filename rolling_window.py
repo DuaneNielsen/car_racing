@@ -2,6 +2,7 @@ import jax.numpy as jnp
 from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
+import scipy.interpolate as interpolate
 
 
 def R(t):
@@ -81,14 +82,14 @@ class Grid:
     def __init__(self, shape):
         self.shape = shape
         grid_0, grid_1 = jnp.meshgrid(*[jnp.arange(d) for d in shape])
-        grid_0, grid_1 = grid_0.flatten(), grid_1.flatten()
-        self.grid = jnp.stack([grid_0, grid_1, jnp.ones_like(grid_0)])
+        self.grid = grid_0.flatten(), grid_1.flatten()
+        self.grid_homo = jnp.stack([*self.grid, jnp.ones_like(self.grid[0])])
 
     def index(self, M=None):
         if M is None:
-            return self.grid
+            return self.grid_homo
         else:
-            return jnp.matmul(M, self.grid).astype(jnp.int32)
+            return jnp.matmul(M, self.grid_homo)
 
 
 class VehicleTrajectoryObs:
@@ -118,46 +119,57 @@ class VehicleTrajectoryObs:
         self.state_grid = Grid(self.states.shape[1:3])
 
 
-def bilinear_interpolate(map, sdf, M):
-    shape = sdf.shape[0:2]
-    grid_0, grid_1 = jnp.meshgrid(*[jnp.arange(d) for d in shape])
-    grid_0, grid_1 = grid_0.flatten(), grid_1.flatten()
-    source_index = jnp.stack([grid_0, grid_1, jnp.ones_like(grid_0)])
-    dest_index = jnp.matmul(M, source_index)[0:2]
-    rem = jnp.mod(dest_index, 1)
-    dest_index = dest_index.astype(int)
-    rem_x = rem[0]
-    rem_y = rem[1]
-    sdf = jnp.pad(sdf, mode='edge', pad_width=1)[1:, 1:]
-    floor_sdf = sdf[source_index[0], source_index[1]]
-    x_sdf = sdf[source_index[0] + 1, source_index[1]]
-    y_sdf = sdf[source_index[0], source_index[1] + 1]
-    map[dest_index[0], dest_index[1]] = floor_sdf * (1 - rem_x) + x_sdf * rem_x + floor_sdf * (1 - rem_y) + y_sdf * rem_y
-    return map
-
-
 class MapArray:
-    def __init__(self, shape):
-        self.map = np.zeros(shape)
-        self.N = np.zeros(shape, dtype=int)
-        self.shape = shape
-        self.xlim = (shape[0], 0)
-        self.ylim = (shape[1], 0)
+    def __init__(self, map_shape):
+        self.map = np.zeros(map_shape)
+        self.N = np.zeros(map_shape, dtype=int)
+        self.shape = map_shape
+        self.xlim = (map_shape[0], 0)
+        self.ylim = (map_shape[1], 0)
+        self.map_grid = Grid(map_shape[0:2])
+        self.grid0, self.grid1 = np.meshgrid(np.arange(map_shape[0]), np.arange(map_shape[1]))
 
     def integrate(self, dest_index_head, source_index_head, sdf_head, dest_index_tail, source_index_tail, sdf_tail):
-        self.xlim = min(self.xlim[0], dest_index_head[1].min()), max(self.xlim[1], dest_index_head[1].max())
-        self.ylim = min(self.ylim[0], dest_index_head[0].min()), max(self.ylim[1], dest_index_head[0].max())
 
-        self.map[dest_index_head[0], dest_index_head[1]] += sdf_head[source_index_head[0], source_index_head[1]]
-        self.N[dest_index_head[0], dest_index_head[1]] += 1
+        scan_grid = Grid(sdf_head.shape[0:2])
+
+        dest_map = interpolate.griddata(
+            points=dest_index_head[0:2].T,
+            values=sdf_head[scan_grid.grid[0], scan_grid.grid[1]],
+            xi=(self.grid0, self.grid1),
+            method='linear'
+        )
+
+        mask = ~np.isnan(dest_map)
+        self.map[mask] += dest_map[mask]
+        self.N[mask] += 1
 
         if sdf_tail is not None:
-            self.N[dest_index_tail[0], dest_index_tail[1]] -= 1
-            self.map[dest_index_tail[0], dest_index_tail[1]] -= sdf_tail[source_index_tail[0], source_index_tail[1]]
+
+            scan_grid = Grid(sdf_tail.shape[0:2])
+
+            tail_map = interpolate.griddata(
+                points=dest_index_tail[0:2].T,
+                values=sdf_tail[scan_grid.grid[0], scan_grid.grid[1]],
+                xi=(self.grid0, self.grid1),
+                method='linear'
+            )
+
+            mask = ~np.isnan(tail_map)
+            self.map[mask] -= tail_map[mask]
+            self.N[mask] -= 1
+
+    def calc_lim(self, mask):
+        zmask = ~mask
+        if len(mask.shape) > 2:
+            zmask = zmask[:, :, 0]
+        # get the bounding box by taking the gradient of the mask marginals
+        self.xlim = [i.item() for i in np.where(np.convolve(zmask.max(0), np.array([1., 1.])) == 1.)[0]]
+        self.ylim = [i.item() for i in np.where(np.convolve(zmask.max(1), np.array([1., 1.])) == 1.)[0]]
 
     def mean(self):
         mask = self.N == 0
-
+        self.calc_lim(mask)
         the_map = np.zeros(self.shape)
         the_map[~mask] = self.map[~mask] / self.N[~mask]
         return the_map
@@ -250,7 +262,7 @@ if __name__ == '__main__':
     trj = VehicleTrajectoryObs(12, start=70)
     start = invert_M(trj.pose[0])
     ep_len = trj.sdfs.shape[0]
-    window_size = 128
+    window_size = 64
 
     for t in range(ep_len):
 
@@ -280,28 +292,30 @@ if __name__ == '__main__':
         dest_index_tail, source_index_tail = trj.state_grid.index(pose_tail), trj.state_grid.index()
         plot.map_state.integrate(dest_index, source_index, state, dest_index_tail, source_index_tail, state_tail)
 
-        plot.clear()
+        if t_tail >= 0:
 
-        # show images
-        plot.draw_img(plot.ax_sdf, sdf)
-        plot.draw_img(plot.ax_state, state)
-        plot.draw_img(plot.ax_road, sdf_road)
+            plot.clear()
 
-        # the pose data is in h, w space, but we want the verts in x, y space
-        # so we must transpose the co-ordinates
-        transpose_axes = jnp.array([
-            [0, 1., 0],
-            [1., 0, 0],
-            [0, 0, 1.]
-        ])
-        pose = np.matmul(transpose_axes, pose)
+            # show images
+            plot.draw_img(plot.ax_sdf, sdf_tail)
+            plot.draw_img(plot.ax_state, state_tail)
+            plot.draw_img(plot.ax_road, sdf_road_tail)
 
-        # draw the bounding box and vehicle position
-        plot.draw_poly(plot.ax_map_sdf, np.matmul(pose, trj.verts))
-        plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(pose, trj.C), np.array([[0.], [0.], [1.]])))
-        plot.draw_poly(plot.ax_map_state, np.matmul(pose, trj.verts))
-        plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(pose, trj.C), np.array([[0.], [0.], [1.]])))
-        plot.draw_maps()
-        plot.update()
+            # the pose data is in h, w space, but we want the verts in x, y space
+            # so we must transpose the co-ordinates
+            # transpose_axes = jnp.array([
+            #     [0, 1., 0],
+            #     [1., 0, 0],
+            #     [0, 0, 1.]
+            # ])
+            # pose_tail = np.matmul(transpose_axes, pose_tail)
+
+            # draw the bounding box and vehicle position
+            plot.draw_poly(plot.ax_map_sdf, np.matmul(pose_tail, trj.verts))
+            plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(pose_tail, trj.C), np.array([[0.], [0.], [1.]])))
+            plot.draw_poly(plot.ax_map_state, np.matmul(pose_tail, trj.verts))
+            plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(pose_tail, trj.C), np.array([[0.], [0.], [1.]])))
+            plot.draw_maps()
+            plot.update()
 
     plt.show()
