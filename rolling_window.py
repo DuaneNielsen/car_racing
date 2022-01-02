@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
 import scipy.interpolate as interpolate
-
+import time
 
 def R(t):
     return jnp.array([
@@ -129,34 +129,31 @@ class MapArray:
         self.map_grid = Grid(map_shape[0:2])
         self.grid0, self.grid1 = np.meshgrid(np.arange(map_shape[0]), np.arange(map_shape[1]))
 
-    def integrate(self, dest_index_head, source_index_head, sdf_head, dest_index_tail, source_index_tail, sdf_tail):
+    def interpolate(self, pose, image):
 
-        scan_grid = Grid(sdf_head.shape[0:2])
+        scan_grid = Grid(image.shape[0:2])
+        points = scan_grid.index(pose)[0:2].T
 
-        dest_map = interpolate.griddata(
-            points=dest_index_head[0:2].T,
-            values=sdf_head[scan_grid.grid[0], scan_grid.grid[1]],
+        map = interpolate.griddata(
+            points=points,
+            values=image[scan_grid.grid[0], scan_grid.grid[1]],
             xi=(self.grid0, self.grid1),
             method='linear'
         )
 
-        mask = ~np.isnan(dest_map)
-        self.map[mask] += dest_map[mask]
+        mask = ~np.isnan(map)
+        return map, mask
+
+    def integrate(self, pose_head, image_head, pose_tail, image_tail):
+
+        map, mask = self.interpolate(pose_head, image_head)
+        self.map[mask] += map[mask]
         self.N[mask] += 1
 
-        if sdf_tail is not None:
+        if image_tail is not None:
 
-            scan_grid = Grid(sdf_tail.shape[0:2])
-
-            tail_map = interpolate.griddata(
-                points=dest_index_tail[0:2].T,
-                values=sdf_tail[scan_grid.grid[0], scan_grid.grid[1]],
-                xi=(self.grid0, self.grid1),
-                method='linear'
-            )
-
-            mask = ~np.isnan(tail_map)
-            self.map[mask] -= tail_map[mask]
+            map, mask = self.interpolate(pose_tail, image_tail)
+            self.map[mask] -= map[mask]
             self.N[mask] -= 1
 
     def calc_lim(self, mask):
@@ -283,14 +280,9 @@ if __name__ == '__main__':
             sdf_tail, sdf_road_tail, state_tail, pose_tail = None, None, None, None
 
         # write to map
-        dest_index, source_index = trj.sdf_grid.index(pose), trj.sdf_grid.index()
-        dest_index_tail, source_index_tail = trj.sdf_grid.index(pose_tail), trj.sdf_grid.index()
-        plot.map_sdf.integrate(dest_index, source_index, sdf, dest_index_tail, source_index_tail, sdf_tail)
-        plot.map_road.integrate(dest_index, source_index, sdf_road, dest_index_tail, source_index_tail, sdf_road_tail)
-
-        dest_index, source_index = trj.state_grid.index(pose), trj.state_grid.index()
-        dest_index_tail, source_index_tail = trj.state_grid.index(pose_tail), trj.state_grid.index()
-        plot.map_state.integrate(dest_index, source_index, state, dest_index_tail, source_index_tail, state_tail)
+        plot.map_sdf.integrate(pose, sdf, pose_tail, sdf_tail)
+        plot.map_road.integrate(pose, sdf_road, pose_tail, sdf_road_tail)
+        plot.map_state.integrate(pose, state, pose_tail, state_tail)
 
         if t_tail >= 0:
 
