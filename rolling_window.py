@@ -131,12 +131,12 @@ class MapArray:
 
     def interpolate(self, pose, image):
 
-        scan_grid = Grid(image.shape[0:2])
-        points = scan_grid.index(pose)[0:2].T
+        image_grid = Grid(image.shape[0:2])
+        points = image_grid.index(pose)[0:2].T
 
         map = interpolate.griddata(
             points=points,
-            values=image[scan_grid.grid[0], scan_grid.grid[1]],
+            values=image[image_grid.grid[0], image_grid.grid[1]],
             xi=(self.grid0, self.grid1),
             method='linear'
         )
@@ -248,14 +248,8 @@ class Plotter:
 
 
 if __name__ == '__main__':
-    plot = Plotter(lim=1000, layout='default')
-    assert jnp.allclose(jnp.eye(3),
-                        jnp.matmul(
-                            M(jnp.array([1., 1., jnp.pi / 8])),
-                            inv(jnp.array([1., 1., jnp.pi / 8]))
-                        ),
-                        atol=1e-6)
 
+    plot = Plotter(lim=1000, layout='default')
     trj = VehicleTrajectoryObs(12, start=70)
     start = invert_M(trj.pose[0])
     ep_len = trj.sdfs.shape[0]
@@ -292,15 +286,6 @@ if __name__ == '__main__':
             plot.draw_img(plot.ax_sdf, sdf_tail)
             plot.draw_img(plot.ax_state, state_tail)
             plot.draw_img(plot.ax_road, sdf_road_tail)
-
-            # the pose data is in h, w space, but we want the verts in x, y space
-            # so we must transpose the co-ordinates
-            # transpose_axes = jnp.array([
-            #     [0, 1., 0],
-            #     [1., 0, 0],
-            #     [0, 0, 1.]
-            # ])
-            # pose_tail = np.matmul(transpose_axes, pose_tail)
 
             # draw the bounding box and vehicle position
             plot.draw_poly(plot.ax_map_sdf, np.matmul(pose_tail, trj.verts))
