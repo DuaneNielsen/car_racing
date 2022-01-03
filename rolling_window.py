@@ -211,10 +211,11 @@ class Plotter:
                     ax.clear()
 
     def draw_map(self, ax, map, xlim=None, ylim=None):
-        ax.imshow(map, origin='lower')
-        ax.set_aspect('equal')
-        ax.set_xlim(xlim)
-        ax.set_ylim(ylim)
+        if ax is not None:
+            ax.imshow(map, origin='lower')
+            ax.set_aspect('equal')
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
 
     def draw_img(self, ax, img):
         if ax is not None:
@@ -269,10 +270,8 @@ if __name__ == '__main__':
         map_road.integrate(pose, sdf_road, pose_tail, sdf_road_tail)
         map_state.integrate(pose, state, pose_tail, state_tail)
 
-        def center(image, pose, shape):
-            centered_pose = np.matmul(jnp.eye(3), invert_M(pose))
-            centered_pose = np.matmul(M(jnp.array([shape[0]/2, shape[1]/2, 0.])), centered_pose)
-            return cv2.warpAffine(image, centered_pose[0:2, :], shape)
+        def warp(image, pose, shape):
+            return cv2.warpAffine(image, pose[0:2, :], shape)
 
         if t_tail >= 0:
 
@@ -284,10 +283,30 @@ if __name__ == '__main__':
             plot.draw_img(plot.ax_road, sdf_road_tail)
 
             centered_size = 220
+            # centered_pose = np.matmul(trj.C, pose_tail)
 
-            centered_sdf = center(map_sdf.mean(), pose_tail, (centered_size, centered_size))
-            centered_road = center(map_road.mean(), pose_tail, (centered_size, centered_size))
-            centered_state = center(np.floor(map_state.mean()).astype(np.uint8), pose_tail, (centered_size, centered_size))
+            pose_tail_origin = np.matmul(jnp.eye(3), invert_M(pose_tail))
+
+            def center(pose):
+                flip = np.array([
+                    [0., 1., 0.],
+                    [1., 0., 0.],
+                    [0., 0., 1.]
+                ])
+                centered_pose = np.matmul(flip, pose)
+                center_vehicle = np.array([
+                    [1., 0., -75.],
+                    [0., 1., -50.],
+                    [0., 0., 1.]
+                ])
+                centered_pose = np.matmul(center_vehicle, centered_pose)
+                centered_pose = np.matmul(M(jnp.array([centered_size / 2, centered_size / 2, 0.])), centered_pose)
+                return centered_pose
+
+            centered_pose = center(pose_tail_origin)
+            centered_sdf = warp(map_sdf.mean(), centered_pose, (centered_size, centered_size))
+            centered_road = warp(map_road.mean(), centered_pose, (centered_size, centered_size))
+            centered_state = warp(np.floor(map_state.mean()).astype(np.uint8), centered_pose, (centered_size, centered_size))
 
             # draw maps
             plot.draw_map(plot.ax_map_sdf, centered_sdf, (0, centered_size), (0, centered_size))
@@ -295,10 +314,11 @@ if __name__ == '__main__':
             plot.draw_map(plot.ax_map_state, centered_state, (0, centered_size), (0, centered_size))
 
             # draw the bounding box and vehicle position
-            plot.draw_poly(plot.ax_map_sdf, np.matmul(pose_tail, trj.verts))
-            plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(pose_tail, trj.C), np.array([[0.], [0.], [1.]])))
-            plot.draw_poly(plot.ax_map_state, np.matmul(pose_tail, trj.verts))
-            plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(pose_tail, trj.C), np.array([[0.], [0.], [1.]])))
+            center_t = center(np.eye(3))
+            plot.draw_poly(plot.ax_map_sdf, np.matmul(center_t, trj.verts))
+            plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(center_t, trj.C), np.array([[0.], [0.], [1.]])))
+            plot.draw_poly(plot.ax_map_state, np.matmul(center_t, trj.verts))
+            plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(center_t, trj.C), np.array([[0.], [0.], [1.]])))
 
             plot.update()
 
