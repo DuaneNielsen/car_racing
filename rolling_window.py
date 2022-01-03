@@ -3,7 +3,9 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
 import scipy.interpolate as interpolate
-import time
+from tqdm import tqdm
+import cv2
+
 
 def R(t):
     return jnp.array([
@@ -119,6 +121,22 @@ class VehicleTrajectoryObs:
         self.state_grid = Grid(self.states.shape[1:3])
 
 
+def interpolate_to_grid(pose, image, dest_grid):
+
+    image_grid = Grid(image.shape[0:2])
+    points = image_grid.index(pose)[0:2].T
+
+    map = interpolate.griddata(
+        points=points,
+        values=image[image_grid.grid[0], image_grid.grid[1]],
+        xi=dest_grid,
+        method='linear'
+    )
+
+    mask = ~np.isnan(map)
+    return map, mask
+
+
 class MapArray:
     def __init__(self, map_shape):
         self.map = np.zeros(map_shape)
@@ -129,30 +147,15 @@ class MapArray:
         self.map_grid = Grid(map_shape[0:2])
         self.grid0, self.grid1 = np.meshgrid(np.arange(map_shape[0]), np.arange(map_shape[1]))
 
-    def interpolate(self, pose, image):
+    def integrate(self, pose_head, image_head, pose_tail=None, image_tail=None):
 
-        image_grid = Grid(image.shape[0:2])
-        points = image_grid.index(pose)[0:2].T
-
-        map = interpolate.griddata(
-            points=points,
-            values=image[image_grid.grid[0], image_grid.grid[1]],
-            xi=(self.grid0, self.grid1),
-            method='linear'
-        )
-
-        mask = ~np.isnan(map)
-        return map, mask
-
-    def integrate(self, pose_head, image_head, pose_tail, image_tail):
-
-        map, mask = self.interpolate(pose_head, image_head)
+        map, mask = interpolate_to_grid(pose_head, image_head, (self.grid0, self.grid1))
         self.map[mask] += map[mask]
         self.N[mask] += 1
 
         if image_tail is not None:
 
-            map, mask = self.interpolate(pose_tail, image_tail)
+            map, mask = interpolate_to_grid(pose_tail, image_tail, (self.grid0, self.grid1))
             self.map[mask] -= map[mask]
             self.N[mask] -= 1
 
@@ -174,11 +177,6 @@ class MapArray:
 
 class Plotter:
     def __init__(self, lim, layout='default'):
-        self.lim = lim
-        self.map_sdf = MapArray((lim * 2, lim * 2))
-        self.map_road = MapArray((lim * 2, lim * 2))
-        self.map_state = MapArray((lim * 2, lim * 2, 3))
-
         self.fig = plt.figure(figsize=(18, 12))
 
         self.ax_sdf, self.ax_state, self.ax_road = None, None, None
@@ -212,24 +210,11 @@ class Plotter:
                 if ax is not None:
                     ax.clear()
 
-    def draw_maps(self):
-        if self.ax_map_sdf is not None:
-            self.ax_map_sdf.imshow(self.map_sdf.mean(), origin='lower')
-            self.ax_map_sdf.set_aspect('equal')
-            self.ax_map_sdf.set_xlim(self.map_sdf.xlim)
-            self.ax_map_sdf.set_ylim(self.map_sdf.ylim)
-
-        if self.ax_map_state is not None:
-            self.ax_map_state.imshow(np.floor(self.map_state.mean()).astype(np.uint8), origin='lower')
-            self.ax_map_state.set_aspect('equal')
-            self.ax_map_state.set_xlim(self.map_state.xlim)
-            self.ax_map_state.set_ylim(self.map_state.ylim)
-
-        if self.ax_map_road is not None:
-            self.ax_map_road.imshow(self.map_road.mean(), origin='lower')
-            self.ax_map_road.set_aspect('equal')
-            self.ax_map_road.set_xlim(self.map_road.xlim)
-            self.ax_map_road.set_ylim(self.map_road.ylim)
+    def draw_map(self, ax, map, xlim=None, ylim=None):
+        ax.imshow(map, origin='lower')
+        ax.set_aspect('equal')
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
 
     def draw_img(self, ax, img):
         if ax is not None:
@@ -249,13 +234,19 @@ class Plotter:
 
 if __name__ == '__main__':
 
+    m = M(jnp.array([1., 1., 0]))
+
     plot = Plotter(lim=1000, layout='default')
     trj = VehicleTrajectoryObs(12, start=70)
     start = invert_M(trj.pose[0])
     ep_len = trj.sdfs.shape[0]
-    window_size = 64
+    window_size = 16
+    lim = 1000
+    map_sdf = MapArray((lim * 2, lim * 2))
+    map_road = MapArray((lim * 2, lim * 2))
+    map_state = MapArray((lim * 2, lim * 2, 3))
 
-    for t in range(ep_len):
+    for t in tqdm(range(ep_len)):
 
         t_tail, t_head = t-window_size, t
 
@@ -263,20 +254,25 @@ if __name__ == '__main__':
 
         # center pose in map
         pose = jnp.matmul(start, pose)
-        pose = jnp.matmul(M(jnp.array([plot.lim / 2, plot.lim / 2, 0.])), pose)
+        pose = jnp.matmul(M(jnp.array([lim / 2, lim / 2, 0.])), pose)
 
         if t_tail >= 0:
             sdf_tail, sdf_road_tail, state_tail, pose_tail = trj.sdfs[t_tail], trj.sdfs_road[t_tail], trj.states[t_tail], trj.pose[t_tail]
             # center pose in map
             pose_tail = jnp.matmul(start, pose_tail)
-            pose_tail = jnp.matmul(M(jnp.array([plot.lim / 2, plot.lim / 2, 0.])), pose_tail)
+            pose_tail = jnp.matmul(M(jnp.array([lim / 2, lim / 2, 0.])), pose_tail)
         else:
             sdf_tail, sdf_road_tail, state_tail, pose_tail = None, None, None, None
 
         # write to map
-        plot.map_sdf.integrate(pose, sdf, pose_tail, sdf_tail)
-        plot.map_road.integrate(pose, sdf_road, pose_tail, sdf_road_tail)
-        plot.map_state.integrate(pose, state, pose_tail, state_tail)
+        map_sdf.integrate(pose, sdf, pose_tail, sdf_tail)
+        map_road.integrate(pose, sdf_road, pose_tail, sdf_road_tail)
+        map_state.integrate(pose, state, pose_tail, state_tail)
+
+        def center(image, pose, shape):
+            centered_pose = np.matmul(jnp.eye(3), invert_M(pose))
+            centered_pose = np.matmul(M(jnp.array([shape[0]/2, shape[1]/2, 0.])), centered_pose)
+            return cv2.warpAffine(image, centered_pose[0:2, :], shape)
 
         if t_tail >= 0:
 
@@ -287,12 +283,23 @@ if __name__ == '__main__':
             plot.draw_img(plot.ax_state, state_tail)
             plot.draw_img(plot.ax_road, sdf_road_tail)
 
+            centered_size = 220
+
+            centered_sdf = center(map_sdf.mean(), pose_tail, (centered_size, centered_size))
+            centered_road = center(map_road.mean(), pose_tail, (centered_size, centered_size))
+            centered_state = center(np.floor(map_state.mean()).astype(np.uint8), pose_tail, (centered_size, centered_size))
+
+            # draw maps
+            plot.draw_map(plot.ax_map_sdf, centered_sdf, (0, centered_size), (0, centered_size))
+            plot.draw_map(plot.ax_map_road, centered_road, (0, centered_size), (0, centered_size))
+            plot.draw_map(plot.ax_map_state, centered_state, (0, centered_size), (0, centered_size))
+
             # draw the bounding box and vehicle position
             plot.draw_poly(plot.ax_map_sdf, np.matmul(pose_tail, trj.verts))
             plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(pose_tail, trj.C), np.array([[0.], [0.], [1.]])))
             plot.draw_poly(plot.ax_map_state, np.matmul(pose_tail, trj.verts))
             plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(pose_tail, trj.C), np.array([[0.], [0.], [1.]])))
-            plot.draw_maps()
+
             plot.update()
 
     plt.show()
