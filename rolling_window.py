@@ -1,4 +1,4 @@
-import jax.numpy as jnp
+import numpy as jnp
 from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
@@ -154,20 +154,11 @@ class MapArray:
             self.map[mask] -= map[mask]
             self.N[mask] -= 1
 
-    def calc_lim(self, mask):
-        zmask = ~mask
-        if len(mask.shape) > 2:
-            zmask = zmask[:, :, 0]
-        # get the bounding box by taking the gradient of the mask marginals
-        self.xlim = [i.item() for i in np.where(np.convolve(zmask.max(0), np.array([1., 1.])) == 1.)[0]]
-        self.ylim = [i.item() for i in np.where(np.convolve(zmask.max(1), np.array([1., 1.])) == 1.)[0]]
-
     def mean(self):
-        mask = self.N == 0
-        self.calc_lim(mask)
+        mask = self.N != 0
         the_map = np.zeros(self.shape)
-        the_map[~mask] = self.map[~mask] / self.N[~mask]
-        return the_map
+        the_map[mask] = self.map[mask] / self.N[mask]
+        return the_map, mask
 
 
 class Plotter:
@@ -176,16 +167,21 @@ class Plotter:
 
         self.ax_sdf, self.ax_state, self.ax_road = None, None, None
         self.ax_map_sdf, self.ax_map_state, self.ax_map_road = None, None, None
+        self.ax_map_sdf_mask, self.ax_map_state_mask, self.ax_map_road_mask = None, None, None
 
         if layout == 'default':
-            gs = self.fig.add_gridspec(9, 4)
-            self.ax_sdf = self.fig.add_subplot(gs[0:3, 3])
-            self.ax_state = self.fig.add_subplot(gs[3:6, 3])
-            self.ax_road = self.fig.add_subplot(gs[6:9, 3])
+            gs = self.fig.add_gridspec(9, 7)
+            self.ax_sdf = self.fig.add_subplot(gs[0:3, 6])
+            self.ax_state = self.fig.add_subplot(gs[3:6, 6])
+            self.ax_road = self.fig.add_subplot(gs[6:9, 6])
 
-            self.ax_map_sdf = self.fig.add_subplot(gs[0:3, 0:3])
-            self.ax_map_state = self.fig.add_subplot(gs[3:6, 0:3])
-            self.ax_map_road = self.fig.add_subplot(gs[6:9, 0:3])
+            self.ax_map_sdf = self.fig.add_subplot(gs[0:3, 3:6])
+            self.ax_map_state = self.fig.add_subplot(gs[3:6, 3:6])
+            self.ax_map_road = self.fig.add_subplot(gs[6:9, 3:6])
+
+            self.ax_map_sdf_mask = self.fig.add_subplot(gs[0:3, 0:3])
+            self.ax_map_state_mask = self.fig.add_subplot(gs[3:6, 0:3])
+            self.ax_map_road_mask = self.fig.add_subplot(gs[6:9, 0:3])
 
         elif layout == 'sdf_map':
             self.ax_map_sdf = self.fig.add_subplot(1, 1, 1)
@@ -230,15 +226,19 @@ class Plotter:
 
 if __name__ == '__main__':
 
+    episode = 12
+    lookbehind = 16
+    lookahead = 128
+    start_step = 70
+    visualize = False
+
     m = M(jnp.array([1., 1., 0]))
 
     plot = Plotter(lim=1000, layout='default')
-    trj = VehicleTrajectoryObs(12, start=70)
+    trj = VehicleTrajectoryObs(episode, start=start_step)
     start = invert_M(trj.pose[0])
     ep_len = trj.sdfs.shape[0]
 
-    lookbehind = 16
-    lookahead = 32
     window_size = lookahead + lookbehind
     lim = 1000
     map_sdf = MapArray((lim * 2, lim * 2))
@@ -249,6 +249,7 @@ if __name__ == '__main__':
         pose = jnp.matmul(start, pose)
         return jnp.matmul(M(jnp.array([lim / 2, lim / 2, 0.])), pose)
 
+    sdf_stack, sdf_road_stack, state_stack, sdf_mask_stack, sdf_road_mask_stack, state_mask_stack = [], [], [], [], [], []
 
     for t in tqdm(range(ep_len)):
 
@@ -277,17 +278,10 @@ if __name__ == '__main__':
         map_road.integrate(pose, sdf_road, pose_tail, sdf_road_tail)
         map_state.integrate(pose, state, pose_tail, state_tail)
 
-        def warp(image, pose, shape):
-            return cv2.warpAffine(image, pose[0:2, :], shape)
+        def warp(image, mask, pose, shape):
+            return cv2.warpAffine(image, pose[0:2, :], shape), cv2.warpAffine(mask.astype(float), pose[0:2, :], shape)
 
         if t_tail >= 0:
-
-            plot.clear()
-
-            # show images
-            plot.draw_img(plot.ax_sdf, sdf_middle)
-            plot.draw_img(plot.ax_state, state_middle)
-            plot.draw_img(plot.ax_road, sdf_road_middle)
 
             centered_size = 220
             # centered_pose = np.matmul(trj.C, pose_tail)
@@ -312,28 +306,60 @@ if __name__ == '__main__':
                 return centered_pose
 
             centered_pose = center(pose_middle_origin)
-            centered_sdf = warp(map_sdf.mean(), centered_pose, (centered_size, centered_size))
-            centered_road = warp(map_road.mean(), centered_pose, (centered_size, centered_size))
-            centered_state = warp(np.floor(map_state.mean()).astype(np.uint8), centered_pose, (centered_size, centered_size))
+            centered_sdf, centered_sdf_mask = warp(*map_sdf.mean(), centered_pose, (centered_size, centered_size))
+            centered_road, centered_road_mask = warp(*map_road.mean(), centered_pose, (centered_size, centered_size))
+            centered_state, centered_state_mask = map_state.mean()
+            centered_state, centered_state_mask = warp(np.floor(centered_state).astype(np.uint8), centered_state_mask, centered_pose, (centered_size, centered_size))
 
-            # draw maps
-            plot.draw_map(plot.ax_map_sdf, centered_sdf, (0, centered_size), (0, centered_size))
-            plot.draw_map(plot.ax_map_road, centered_road, (0, centered_size), (0, centered_size))
-            plot.draw_map(plot.ax_map_state, centered_state, (0, centered_size), (0, centered_size))
+            sdf_stack += [centered_sdf]
+            sdf_road_stack += [centered_road]
+            state_stack += [centered_state]
+            sdf_mask_stack += [centered_sdf_mask]
+            sdf_road_mask_stack += [centered_road_mask]
+            state_mask_stack += [centered_state_mask]
 
-            C = jnp.array([
-                [1., 0., 47.],
-                [0., 1., 70.],
-                [0., 0., 1.]
-            ])
+            if visualize:
+                plot.clear()
 
-            # draw the bounding box and vehicle position
-            center_t = center(np.eye(3))
-            plot.draw_poly(plot.ax_map_sdf, np.matmul(center_t, trj.verts))
-            plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(center_t, C), np.array([[0.], [0.], [1.]])))
-            plot.draw_poly(plot.ax_map_state, np.matmul(center_t, trj.verts))
-            plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(center_t, C), np.array([[0.], [0.], [1.]])))
+                # show images
+                plot.draw_img(plot.ax_sdf, sdf_middle)
+                plot.draw_img(plot.ax_state, state_middle)
+                plot.draw_img(plot.ax_road, sdf_road_middle)
 
-            plot.update()
+                # draw maps
+                plot.draw_map(plot.ax_map_sdf, centered_sdf)
+                plot.draw_map(plot.ax_map_road, centered_road)
+                plot.draw_map(plot.ax_map_state, centered_state)
 
-    plt.show()
+                plot.draw_map(plot.ax_map_sdf_mask, centered_sdf_mask)
+                plot.draw_map(plot.ax_map_road_mask, centered_road_mask)
+                plot.draw_map(plot.ax_map_state_mask, centered_state_mask)
+
+                C = jnp.array([
+                    [1., 0., 47.],
+                    [0., 1., 70.],
+                    [0., 0., 1.]
+                ])
+
+                # draw the bounding box and vehicle position
+                center_t = center(np.eye(3))
+                plot.draw_poly(plot.ax_map_sdf, np.matmul(center_t, trj.verts))
+                plot.draw_points(plot.ax_map_sdf, np.matmul(np.matmul(center_t, C), np.array([[0.], [0.], [1.]])))
+                plot.draw_poly(plot.ax_map_state, np.matmul(center_t, trj.verts))
+                plot.draw_points(plot.ax_map_state, np.matmul(np.matmul(center_t, C), np.array([[0.], [0.], [1.]])))
+
+                plot.update()
+
+    # save
+    def save(filename, stack):
+        np.save(f'data/dataset/{episode}_{filename}', np.stack(stack))
+
+    save('sdf_stack', sdf_stack)
+    save('sdf_road_stack', sdf_road_stack)
+    save('state_stack', state_stack)
+    save('sdf_mask_stack', sdf_mask_stack)
+    save('sdf_road_mask_stack', sdf_road_mask_stack)
+    save('state_mask_stack', state_mask_stack)
+
+
+
