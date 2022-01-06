@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Polygon
 import icp
 import geometry as geo
+import keypoints as kps
 from keypoints import extract_kp, extract_cv2_kp
 import synthworld
 import argparse
@@ -71,12 +72,13 @@ def draw_readout(ax, text):
 
 
 class RecordingEnv:
-    def __init__(self, i, start=0, frameskip=0):
+    def __init__(self, episode, start=0, frameskip=0):
         # load captured data
-        self.episode = np.load(f'data/ep{i}_sdf.npy')
-        self.episode_road = np.load(f'data/ep{i}_sdf_road.npy')
-        self.episode_state = np.load(f'data/ep{i}_state.npy')
-        self.episode_gt = np.load(f'data/ep{i}_gt.npy')
+        self.episode = np.load(f'data/ep{episode}_sdf.npy')
+        self.episode_road = np.load(f'data/ep{episode}_sdf_road.npy')
+        self.episode_state = np.load(f'data/ep{episode}_state.npy')
+        self.episode_gt = np.load(f'data/ep{episode}_gt.npy')
+        self.episode_segment = np.load(f'data/ep{episode}_segment.npy')
         self.episode_gt[:, 2] = -self.episode_gt[:, 2]
         self.h, self.w = self.episode.shape[1], self.episode.shape[2]
         self.start = start
@@ -109,24 +111,31 @@ def make_grid(h, w, homo=False):
 
 if __name__ == '__main__':
 
-    # plotting
-    # fig = plt.figure(figsize=(18, 10))
-    # axes = fig.subplots(3, 3)
-    # state0_plt, state1_plt, text_plt = axes[0]
-    # unaligned, aligned, stitched = axes[1]
-    # unaligned.set_aspect('equal')
-    # aligned.set_aspect('equal')
-    # scatter_pos, scatter_angle, error_plt = axes[2]
-    # fig.show()
-
-    fig_world = plt.figure()
-    world_plot = fig_world.subplots(1, 1)
+    """
+    you can't re- run this as it will cut off the first 70 frames eaach run.
+    # todo fix this
+    """
 
     parser = argparse.ArgumentParser(description='Process some integers.')
-    parser.add_argument("-ep", "--episode", type=int)
+    parser.add_argument("-ep", "--episode", type=int, default=0)
+    parser.add_argument('-v', "--visualize", action='store_true', default=False)
     args = parser.parse_args()
 
-    env = RecordingEnv(args.episode, start=0)
+    # plotting
+    if args.visualize:
+        fig = plt.figure(figsize=(18, 10))
+        axes = fig.subplots(3, 3)
+        state0_plt, state1_plt, text_plt = axes[0]
+        unaligned, aligned, stitched = axes[1]
+        unaligned.set_aspect('equal')
+        aligned.set_aspect('equal')
+        scatter_pos, scatter_angle, error_plt = axes[2]
+        fig.show()
+
+        fig_world = plt.figure()
+        world_plot = fig_world.subplots(1, 1)
+
+    env = RecordingEnv(args.episode, start=70)
     scan_image, extras = env.reset()
 
     x, y, theta = extras['gt'][0], extras['gt'][1], extras['gt'][2]
@@ -144,7 +153,8 @@ if __name__ == '__main__':
     info = {}
     done = False
     timestep = 0
-    trajectory, trajectory_d, sdf, state = [t1.M], [np.eye(3)], [t1.image], [t1_state]
+    #trajectory, trajectory_d, sdf, state, errors = [t1.M], [np.eye(3)], [t1.image], [t1_state], [0.]
+    trajectory, trajectory_d, sdf, state, errors = [np.eye(3)], [np.eye(3)], [t1.image], [t1_state], [0.]
 
     # world array
     world = np.full((2000, 2000), 4.0)
@@ -182,9 +192,10 @@ if __name__ == '__main__':
             # sift = cv2.SIFT_create(nfeatures=100, contrastThreshold=0.01)
             # t0_kp, t1_kp = extract_cv2_kp(sift, state0, state1, match_metric=cv2.CV_32F)
 
-            # unaligned.clear()
-            # t1.draw(unaligned, color='red', label='t1')
-            # t0.draw(unaligned, items=['box', 'kp'], color='blue', label='t0')
+            if args.visualize:
+                unaligned.clear()
+                t1.draw(unaligned, color='red', label='t1')
+                t0.draw(unaligned, items=['box', 'kp'], color='blue', label='t0')
 
 
             # filter keypoints
@@ -192,17 +203,17 @@ if __name__ == '__main__':
             rms_before = icp.rms(t1_kp_w, t0_kp_w)
 
             # compute alignment and update the t1 frame
-            M, inliers, rms = icp.ransac_icp(source=t1_kp_w, target=t0_kp_w, k=19, n=3, threshold=3.0, d=5.0)
+            M, t, R, inliers, rms = icp.ransac_icp(source=t1_kp_w, target=t0_kp_w, k=19, n=3, threshold=3.0, d=5.0)
             t1.M = np.matmul(M, t1.M)
             delta = np.matmul(M, delta)
 
-            # draw_stiched(stitched, M, t0, t1)
-            # draw_state(state0_plt, t0.image, kp=geo.transform_points(t0.inv_M, t0_kp_w), inliers=inliers)
-            # draw_state(state1_plt, t1.image, kp=geo.transform_points(t1.inv_M, t1_kp_w), inliers=inliers)
-            # plot_geo_diag(aligned, t0.kp_w[:, filter][:, inliers], t1.kp_w[:, filter][:, inliers], t0, t1)
-            # draw_readout(text_plt, f'{timestep}')
-            # plt.pause(2.0)
-            # plt.pause(0.05)
+            if args.visualize:
+                draw_stiched(stitched, M, t0, t1)
+                draw_state(state0_plt, t0.image, kp=geo.transform_points(t0.inv_M, t0_kp_w), inliers=inliers)
+                draw_state(state1_plt, t1.image, kp=geo.transform_points(t1.inv_M, t1_kp_w), inliers=inliers)
+                plot_geo_diag(aligned, t0.kp_w[:, filter][:, inliers], t1.kp_w[:, filter][:, inliers], t0, t1)
+                draw_readout(text_plt, f'{timestep}')
+                #plt.pause(0.5)
 
         # write to world array
         image = t1.road.clip(-4.0, 4.0)
@@ -216,10 +227,11 @@ if __name__ == '__main__':
         world[w_i, h_i] = ((world[w_i, h_i] * n + image[model_grid[1], model_grid[0]]) / (n + 1))
         world_n[w_i, h_i] += 1.
 
-        world_plot.clear()
-        max_h, min_h = max(h_i.max(), max_h), min(h_i.min(), min_h)
-        max_w, min_w = max(w_i.max(), max_w), min(w_i.min(), min_w)
-        world_plot.imshow(world[min_w:max_w, min_h:max_h], cmap='cool')
+        if args.visualize:
+            world_plot.clear()
+            max_h, min_h = max(h_i.max(), max_h), min(h_i.min(), min_h)
+            max_w, min_w = max(w_i.max(), max_w), min(w_i.min(), min_w)
+            world_plot.imshow(world[min_w:max_w, min_h:max_h], cmap='cool')
         kp = t1.kp_w + world_origin.reshape(2, 1)
 
         #draw_gt(*gt_pos)
@@ -230,11 +242,44 @@ if __name__ == '__main__':
         trajectory_d.append(delta)
         sdf.append(t1.image)
         state.append(t1_state)
-        #plt.pause(0.05)
+        errors.append(rms)
+        plt.pause(0.05)
 #
         timestep += 1
+
+    np.save(f'data/ep{args.episode}_sdf.npy', env.episode[env.start:])
+    np.save(f'data/ep{args.episode}_sdf_road.npy', env.episode_road[env.start:])
+    np.save(f'data/ep{args.episode}_state.npy', env.episode_state[env.start:])
+    np.save(f'data/ep{args.episode}_gt.npy', env.episode_gt[env.start:])
+    np.save(f'data/ep{args.episode}_segment.npy', env.episode_segment[env.start:])
 
     np.save(f'data/ep{args.episode}_map', world)
     np.save(f'data/ep{args.episode}_pose', np.stack(trajectory))
     np.save(f'data/ep{args.episode}_pose_d', np.stack(trajectory_d))
+    np.save(f'data/ep{args.episode}_error', np.stack(errors))
     #plt.show()
+
+
+class Episode:
+    def __init__(self, i):
+        self.sdfs = np.load(f'data/ep{i}_sdf_road.npy')[70:]
+        self.states = np.load(f'data/ep{i}_state.npy')[70:]
+        self.pose = np.load(f'data/ep{i}_pose.npy')[70:]
+        self.pose_d = np.load(f'data/ep{i}_pose_d.npy')[70:]
+        self.map = np.load(f'data/ep{i}_map.npy')
+        self.rms = np.load(f'data/ep{i}_error.npy')
+        self.N, self.h, self.w = self.sdfs.shape
+        sample_i = geo.grid_sample(self.h, self.w, 12, pad=4)
+        keypoints = []
+        for i, sdf in enumerate(self.sdfs):
+            keypoints.append(kps.extract_kp(sdf, sample_i, iterations=3))
+        self.kps = np.stack(keypoints)
+        self.vertices = np.array([
+            [0, 0],
+            [self.w-1, 0],
+            [self.w-1, self.h-1],
+            [0, self.h-1]
+        ]).T
+
+    def __len__(self):
+        return self.N

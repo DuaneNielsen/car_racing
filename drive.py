@@ -54,6 +54,7 @@ episode_sdf = []
 episode_state = []
 episode_gt = []
 episode_sdf_road = []
+episode_segment = []
 
 while not done:
     state, reward, done, info = env.step(a)
@@ -86,6 +87,8 @@ while not done:
     sdf_plot.imshow(sdf)
 
     sdf_road = distance_transform_edt(gradient(road.astype(float)) == 0)
+    sign_road = road * 2 - 1
+    sdf_road = sdf_road * sign_road
     road_plot.imshow(sdf_road)
 
     env.render()
@@ -93,13 +96,15 @@ while not done:
     episode_sdf += [sdf]
     episode_sdf_road += [sdf_road]
     episode_state += [state]
+    episode_segment += [road]
     x, y, theta = info['pos']
     episode_gt += [np.array([x, y, theta])]
     if len(episode_sdf) > 1600:
         break
 
-i = 1
+
 np.save(f'data/ep{i}_sdf', np.stack(episode_sdf))
 np.save(f'data/ep{i}_state', np.stack(episode_state))
 np.save(f'data/ep{i}_gt', np.stack(episode_gt))
 np.save(f'data/ep{i}_sdf_road', np.stack(episode_sdf_road))
+np.save(f'data/ep{i}_segment', np.stack(episode_segment))

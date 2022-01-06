@@ -5,6 +5,7 @@ import numpy as np
 import scipy.interpolate as interpolate
 from tqdm import tqdm
 import cv2
+import argparse
 
 
 def R(t):
@@ -109,11 +110,15 @@ class VehicleTrajectoryObs:
         self.pose_d = jnp.load(f'data/ep{i}_pose_d.npy')[start:]
         self.map = jnp.load(f'data/ep{i}_map.npy')
         self.rms = jnp.load(f'data/ep{i}_error.npy')[start:]
+        self.segment = jnp.load(f'data/ep{i}_segment.npy')[start:].astype(float).transpose(0, 2, 1)
         self.N, self.w, self.h = self.sdfs.shape
         self.verts = jnp.array([[0., self.w, self.w, 0.], [0., 0., self.h, self.h], [1., 1., 1., 1.]])
         self.i = -1
         self.sdf_grid = Grid(self.sdfs.shape[1:])
         self.state_grid = Grid(self.states.shape[1:3])
+
+    def get_step(self, t):
+        return trj.sdfs[t], trj.sdfs_road[t], trj.states[t], trj.segment[t], trj.pose[t]
 
 
 def interpolate_to_grid(pose, image, dest_grid):
@@ -165,23 +170,26 @@ class Plotter:
     def __init__(self, lim, layout='default'):
         self.fig = plt.figure(figsize=(18, 12))
 
-        self.ax_sdf, self.ax_state, self.ax_road = None, None, None
-        self.ax_map_sdf, self.ax_map_state, self.ax_map_road = None, None, None
-        self.ax_map_sdf_mask, self.ax_map_state_mask, self.ax_map_road_mask = None, None, None
+        self.ax_sdf, self.ax_state, self.ax_road, self.ax_segment = None, None, None, None
+        self.ax_map_sdf, self.ax_map_state, self.ax_map_road, self.ax_map_segment = None, None, None, None
+        self.ax_map_sdf_mask, self.ax_map_state_mask, self.ax_map_road_mask, self.ax_map_segment_mask = None, None, None, None
 
         if layout == 'default':
-            gs = self.fig.add_gridspec(9, 7)
+            gs = self.fig.add_gridspec(12, 7)
             self.ax_sdf = self.fig.add_subplot(gs[0:3, 6])
             self.ax_state = self.fig.add_subplot(gs[3:6, 6])
             self.ax_road = self.fig.add_subplot(gs[6:9, 6])
+            self.ax_segment = self.fig.add_subplot(gs[9:12, 6])
 
             self.ax_map_sdf = self.fig.add_subplot(gs[0:3, 3:6])
             self.ax_map_state = self.fig.add_subplot(gs[3:6, 3:6])
             self.ax_map_road = self.fig.add_subplot(gs[6:9, 3:6])
+            self.ax_map_segment = self.fig.add_subplot(gs[9:12, 3:6])
 
             self.ax_map_sdf_mask = self.fig.add_subplot(gs[0:3, 0:3])
             self.ax_map_state_mask = self.fig.add_subplot(gs[3:6, 0:3])
             self.ax_map_road_mask = self.fig.add_subplot(gs[6:9, 0:3])
+            self.ax_map_segment_mask = self.fig.add_subplot(gs[9:12, 0:3])
 
         elif layout == 'sdf_map':
             self.ax_map_sdf = self.fig.add_subplot(1, 1, 1)
@@ -191,6 +199,9 @@ class Plotter:
 
         elif layout == 'road':
             self.ax_map_road = self.fig.add_subplot(1, 1, 1)
+
+        elif layout == 'segment':
+            self.ax_map_segment = self.fig.add_subplot(1, 1, 1)
 
         self.axes = [[self.ax_sdf, self.ax_state, self.ax_road], [self.ax_map_sdf, self.ax_map_state, self.ax_map_road]]
         self.fig.show()
@@ -226,11 +237,18 @@ class Plotter:
 
 if __name__ == '__main__':
 
-    episode = 12
-    lookbehind = 16
-    lookahead = 128
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument("-ep", "--episode", type=int, default=0)
+    parser.add_argument('-v', "--visualize", action='store_true', default=False)
+    parser.add_argument('-lb', "--look_behind", type=int, default=False)
+    parser.add_argument('-la', "--look_ahead", type=int, default=False)
+    args = parser.parse_args()
+
+    episode = args.episode
+    lookbehind = args.look_behind
+    lookahead = args.look_ahead
     start_step = 70
-    visualize = False
+    visualize = args.visualize
 
     m = M(jnp.array([1., 1., 0]))
 
@@ -244,39 +262,39 @@ if __name__ == '__main__':
     map_sdf = MapArray((lim * 2, lim * 2))
     map_road = MapArray((lim * 2, lim * 2))
     map_state = MapArray((lim * 2, lim * 2, 3))
+    map_segment = MapArray((lim * 2, lim * 2))
 
     def to_world(pose):
         pose = jnp.matmul(start, pose)
         return jnp.matmul(M(jnp.array([lim / 2, lim / 2, 0.])), pose)
 
     sdf_stack, sdf_road_stack, state_stack, sdf_mask_stack, sdf_road_mask_stack, state_mask_stack = [], [], [], [], [], []
+    segment_stack, segment_mask_stack = [], []
 
     for t in tqdm(range(ep_len)):
 
         t_tail, t_middle, t_head = t-window_size, t-lookahead, t
 
-        sdf, sdf_road, state, pose = trj.sdfs[t_head], trj.sdfs_road[t_head], trj.states[t_head], trj.pose[t_head]
+        sdf, sdf_road, state, segment, pose = trj.get_step(t_head)
 
         pose = to_world(pose)
 
         if t_tail >= 0:
-            sdf_tail, sdf_road_tail, state_tail, pose_tail = trj.sdfs[t_tail], trj.sdfs_road[t_tail], \
-                                                             trj.states[t_tail], trj.pose[t_tail]
+            sdf_tail, sdf_road_tail, state_tail, segment_tail, pose_tail = trj.get_step(t_tail)
             pose_tail = to_world(pose_tail)
 
-            sdf_middle, sdf_road_middle, state_middle, pose_middle = trj.sdfs[t_middle], trj.sdfs_road[t_middle], \
-                                                             trj.states[t_middle], trj.pose[t_middle]
-
+            sdf_middle, sdf_road_middle, state_middle, segment_middle, pose_middle = trj.get_step(t_middle)
             pose_middle = to_world(pose_middle)
 
         else:
-            sdf_tail, sdf_road_tail, state_tail, pose_tail = None, None, None, None
-            sdf_middle, sdf_road_middle, state_middle, pose_middle = None, None, None, None
+            sdf_tail, sdf_road_tail, state_tail, segment_tail, pose_tail = None, None, None, None, None
+            sdf_middle, sdf_road_middle, state_middle, segment_middle, pose_middle = None, None, None, None, None
 
         # write to map
         map_sdf.integrate(pose, sdf, pose_tail, sdf_tail)
         map_road.integrate(pose, sdf_road, pose_tail, sdf_road_tail)
         map_state.integrate(pose, state, pose_tail, state_tail)
+        map_segment.integrate(pose, segment, pose_tail, segment_tail)
 
         def warp(image, mask, pose, shape):
             return cv2.warpAffine(image, pose[0:2, :], shape), cv2.warpAffine(mask.astype(float), pose[0:2, :], shape)
@@ -306,17 +324,23 @@ if __name__ == '__main__':
                 return centered_pose
 
             centered_pose = center(pose_middle_origin)
-            centered_sdf, centered_sdf_mask = warp(*map_sdf.mean(), centered_pose, (centered_size, centered_size))
-            centered_road, centered_road_mask = warp(*map_road.mean(), centered_pose, (centered_size, centered_size))
+            target_shape = (centered_size, centered_size)
+            centered_sdf, centered_sdf_mask = warp(*map_sdf.mean(), centered_pose, target_shape)
+            centered_road, centered_road_mask = warp(*map_road.mean(), centered_pose, target_shape)
             centered_state, centered_state_mask = map_state.mean()
-            centered_state, centered_state_mask = warp(np.floor(centered_state).astype(np.uint8), centered_state_mask, centered_pose, (centered_size, centered_size))
+            centered_state = np.floor(centered_state).astype(np.uint8)
+            centered_state, centered_state_mask = warp(centered_state, centered_state_mask, centered_pose, target_shape)
+            centered_segment, centered_segment_mask = warp(*map_segment.mean(), centered_pose, target_shape)
 
             sdf_stack += [centered_sdf]
             sdf_road_stack += [centered_road]
             state_stack += [centered_state]
+            segment_stack += [centered_segment]
+
             sdf_mask_stack += [centered_sdf_mask]
             sdf_road_mask_stack += [centered_road_mask]
             state_mask_stack += [centered_state_mask]
+            segment_mask_stack += [centered_segment_mask]
 
             if visualize:
                 plot.clear()
@@ -325,15 +349,19 @@ if __name__ == '__main__':
                 plot.draw_img(plot.ax_sdf, sdf_middle)
                 plot.draw_img(plot.ax_state, state_middle)
                 plot.draw_img(plot.ax_road, sdf_road_middle)
+                plot.draw_img(plot.ax_segment, segment_middle)
 
                 # draw maps
                 plot.draw_map(plot.ax_map_sdf, centered_sdf)
                 plot.draw_map(plot.ax_map_road, centered_road)
                 plot.draw_map(plot.ax_map_state, centered_state)
+                plot.draw_map(plot.ax_map_segment, centered_segment)
 
                 plot.draw_map(plot.ax_map_sdf_mask, centered_sdf_mask)
                 plot.draw_map(plot.ax_map_road_mask, centered_road_mask)
                 plot.draw_map(plot.ax_map_state_mask, centered_state_mask)
+                plot.draw_map(plot.ax_map_state_mask, centered_state_mask)
+                plot.draw_map(plot.ax_map_segment_mask, centered_segment_mask)
 
                 C = jnp.array([
                     [1., 0., 47.],
@@ -360,6 +388,8 @@ if __name__ == '__main__':
     save('sdf_mask_stack', sdf_mask_stack)
     save('sdf_road_mask_stack', sdf_road_mask_stack)
     save('state_mask_stack', state_mask_stack)
+    save('segment_stack', segment_stack)
+    save('segment_mask_stack', segment_mask_stack)
 
 
 
