@@ -240,8 +240,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process some integers.')
     parser.add_argument("-ep", "--episode", type=int, default=0)
     parser.add_argument('-v', "--visualize", action='store_true', default=False)
-    parser.add_argument('-lb', "--look_behind", type=int, default=False)
-    parser.add_argument('-la', "--look_ahead", type=int, default=False)
+    parser.add_argument('-lb', "--look_behind", type=int, default=32)
+    parser.add_argument('-la', "--look_ahead", type=int, default=128)
     args = parser.parse_args()
 
     episode = args.episode
@@ -380,7 +380,7 @@ if __name__ == '__main__':
 
     # save
     def save(filename, stack):
-        np.save(f'data/dataset/{episode}_{filename}', np.stack(stack))
+        np.savez(f'data/dataset/{episode}_{filename}', np.stack(stack))
 
     save('sdf_stack', sdf_stack)
     save('sdf_road_stack', sdf_road_stack)
