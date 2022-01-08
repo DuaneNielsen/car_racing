@@ -1,4 +1,5 @@
-from lie.trie import Trie, Element
+from trie import Trie, Element
+import jax.numpy as np
 
 
 def test_add_and_find():
@@ -55,3 +56,49 @@ def test_path():
     guid = tr.children(tr.children(tr.root)[0])[0].id
     p = tr.path(guid)
     assert [e.attrib for e in p] == [0, 1, 4]
+
+
+def test_frames():
+    rsa = np.eye(3)
+    rsb = np.array([
+        [0, -1., 0],
+        [1., 0, 0],
+        [0, 0, 1.]
+    ])
+    rsc = np.array([
+        [0., -1., 0.],
+        [0., 0., -1.],
+        [1., 0., 0.]
+    ])
+
+    class Frame(Element):
+        def __init__(self, r):
+            super().__init__()
+            self.r = r
+
+    tr = Trie(root=Frame(np.eye(3)))
+    rsa = Frame(rsa)
+    rsa_guid = tr.add(rsa)
+    rsb = Frame(rsb)
+    rsb_guid = tr.add(rsb)
+    rsc = Frame(rsc)
+    rsc_guid = tr.add(rsc)
+
+    pa = np.array([1., 1., 0.])
+    pb = np.array([1., -1., 0.])
+    pc = np.array([0., -1., -1.])
+
+    assert np.allclose(pa, np.matmul(tr.root.r, pa))
+
+
+    rac = np.array([
+        [0., -1., 0.],
+        [0., 0., -1.],
+        [1., 0., 0.]
+    ])
+
+    rca = rac.T
+
+    assert np.allclose(rac, change_frame(rsa, rsc))
+    assert np.allclose(rca, change_frame(rsc, rsa))
+    assert np.allclose(pa, np.matmul(change_frame(rsa, rsb), pb))

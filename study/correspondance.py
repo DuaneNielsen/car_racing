@@ -18,10 +18,19 @@ episode = np.load('episode.npy')
 # list of sample indices
 grid = geo.grid_sample(*episode.shape[1:3], grid_spacing=16, pad=2)
 
+
 for t in range(30, episode.shape[0]-1):
 
     t0 = episode[t]
     t1 = episode[t + 1]
+
+    [ax.clear() for ax in axes]
+    t0_plot.imshow(t0)
+    t1_plot.imshow(t1)
+    for i in range(grid.shape[1]):
+        t0_plot.scatter(grid[0, i], grid[1, i])
+        t1_plot.scatter(grid[0, i], grid[1, i])
+    plt.pause(3.0)
 
     [ax.clear() for ax in axes]
     t0_plot.imshow(t0)
@@ -35,6 +44,5 @@ for t in range(30, episode.shape[0]-1):
         t0_plot.scatter(t0_kp[0, i], t0_kp[1, i])
         t1_plot.scatter(t1_kp[0, i], t1_kp[1, i])
 
-    fig.canvas.draw()
-    plt.show()
+    plt.pause(5.0)
 

@@ -1,35 +1,7 @@
 import numpy as np
-import keypoints as kps
-import geometry as geo
 from matplotlib import pyplot as plt
-from matplotlib.patches import Polygon
-import cv2
 
-
-class Episode:
-    def __init__(self, i):
-        self.sdfs = np.load(f'data/ep{i}_sdf_road.npy')[70:]
-        self.states = np.load(f'data/ep{i}_state.npy')[70:]
-        self.pose = np.load(f'data/ep{i}_pose.npy')[70:]
-        self.pose_d = np.load(f'data/ep{i}_pose_d.npy')[70:]
-        self.map = np.load(f'data/ep{i}_map.npy')
-        self.rms = np.load(f'data/ep{1}_error.npy')
-        self.N, self.h, self.w = self.sdfs.shape
-        sample_i = geo.grid_sample(self.h, self.w, 12, pad=4)
-        keypoints = []
-        for i, sdf in enumerate(self.sdfs):
-            keypoints.append(kps.extract_kp(sdf, sample_i, iterations=3))
-        self.kps = np.stack(keypoints)
-        self.vertices = np.array([
-            [0, 0],
-            [self.w-1, 0],
-            [self.w-1, self.h-1],
-            [0, self.h-1]
-        ]).T
-
-    def __len__(self):
-        return self.N
-
+from generate_pose import Episode
 
 memory_set, query_set = [Episode(5), Episode(6), Episode(7)], Episode(0)
 

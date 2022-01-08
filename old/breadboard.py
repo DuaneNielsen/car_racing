@@ -227,15 +227,15 @@ class Plotter:
 
 
 if __name__ == '__main__':
-    plot = Plotter(lim=1000, layout='road')
+    plot = Plotter(lim=1000, layout='default')
     assert jnp.allclose(jnp.eye(3),
                         jnp.matmul(
                             M(jnp.array([1., 1., jnp.pi / 8])),
                             inv(jnp.array([1., 1., jnp.pi / 8]))
                         ),
-                        atol=1e-7)
+                        atol=1e-6)
 
-    trj = VehicleTrajectoryObs(8, start=70)
+    trj = VehicleTrajectoryObs(12, start=70)
     start = invert_M(trj.pose[0])
 
     for sdf, sdf_road, state, pose in zip(trj.sdfs, trj.sdfs_road, trj.states, trj.pose):

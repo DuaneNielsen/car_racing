@@ -3,7 +3,7 @@ import geometry as geo
 from matplotlib import pyplot as plt
 
 if __name__ == '__main__':
-    ep = 0
+    ep = 1
     pose = np.load(f'data/ep{0}_pose.npy')
     sdf = np.load(f'data/ep{0}_sdf.npy')
     state = np.load(f'data/ep{0}_state.npy')

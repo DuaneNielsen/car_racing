@@ -1,0 +1,2 @@
+class LieException(Exception):
+    pass

@@ -21,6 +21,19 @@ def transform_matrix(SE2):
     ])
 
 
+def inv_transform_matrix(SE2):
+    R_T = np.array([
+        [np.cos(SE2[2]), np.sin(SE2[2])],
+        [-np.sin(SE2[2]), np.cos(SE2[2])]
+    ])
+    xy = np.matmul(-R_T, SE2[0:2])
+    return np.array([
+        [np.cos(SE2[2]), np.sin(SE2[2]), xy[0]],
+        [-np.sin(SE2[2]), np.cos(SE2[2]), xy[1]],
+        [0., 0., 1.]
+    ])
+
+
 def adjoint_matrix(SE2):
     return np.array([
         [np.cos(SE2[2]), -np.sin(SE2[2]), SE2[1]],
@@ -41,7 +54,7 @@ def compute_co_effs(theta):
         # see http://ethaneade.com/lie.pdf eqn: (130)
         return 1. - theta ** 2 / 6.0, theta / 2.0 - theta ** 3 / 24.0
     else:
-        return np.sin(theta) / theta, (1 - np.cos(theta))/theta
+        return np.sin(theta) / theta, (1 - np.cos(theta)) / theta
 
 
 def exp(se2):

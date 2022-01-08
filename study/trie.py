@@ -14,7 +14,7 @@ def path(element):
     while element.parent is not None:
         p += [element.parent]
         element = element.parent
-    return reversed(p)
+    return list(reversed(p))
 
 
 class Element:
@@ -31,8 +31,11 @@ class Element:
 
 
 class Trie:
-    def __init__(self):
-        self.root = Element()
+    def __init__(self, root=None):
+        if root is None:
+            self.root = Element()
+        else:
+            self.root = root
         self.elements = {str(self.root.id): self.root}
 
     def find(self, guid):
@@ -40,6 +43,9 @@ class Trie:
             return self.elements[str(guid)]
         else:
             return None
+
+    def __getitem__(self, item):
+        return self.find(item)
 
     def add(self, child, parent=None):
         if parent is None:

@@ -109,3 +109,8 @@ def test_adjoint():
 
     plt.show()
 
+
+def test_inverse():
+    x = SE2.from_xytheta(1., 2., 3.)
+    i = np.matmul(SE2.inv_transform_matrix(x), SE2.transform_matrix(x))
+    assert np.allclose(i, np.eye(3), atol=1e-5)
