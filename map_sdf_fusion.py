@@ -14,17 +14,17 @@ https://graphics.stanford.edu/papers/volrange/volrange.pdf
 
 if __name__ == '__main__':
 
-    i = 2
-    poses = torch.from_numpy(np.load(f'data/ep{i}_pose.npy')).float()
-    sdfs = torch.from_numpy(np.load(f'data/ep{i}_sdf.npy')).float().permute(0, 2, 1)
-    states = torch.from_numpy(np.load(f'data/ep{i}_state.npy'))
+    i = 8
+    poses = torch.from_numpy(np.load(f'data/ep{i}_pose.npy')).float()[70:]
+    sdfs = torch.from_numpy(np.load(f'data/ep{i}_sdf_road.npy')).float().permute(0, 2, 1)[70:]
+    states = torch.from_numpy(np.load(f'data/ep{i}_state.npy'))[70:]
 
     fig = plt.figure()
     sdf_plot = fig.subplots(1, 1)
 
     N, h, w = sdfs.shape
     batch_size = 8
-    world_h, world_w = (800, 400)
+    world_h, world_w = (800, 800)
 
     world_map = torch.zeros((world_h, world_w))
     world_map_N = torch.zeros((world_h, world_w))

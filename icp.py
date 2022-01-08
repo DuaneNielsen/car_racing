@@ -53,10 +53,16 @@ def icp_homo(source, target):
 
     :param source_frame: source keypoints
     :param target_frame: target keypoints
-    :return: homogenous transform that aligns source kp -> target kp
+    :return:
+        M: homogenous transform that aligns source kp -> target kp
+        t: translation from source -> target
+        R: rotation from source -> target
 
     note: to apply to frame, put keypoints in world space, then the resulting
     homo transform will also be in world space
+
+    to use t, R first apply t then R ie np.matmul(R, source + t)
+
     """
 
     _, N = source.shape
@@ -71,9 +77,10 @@ def icp_homo(source, target):
     M = geo.R_around_point_Rt(R, source_center)
 
     # translate source frame to target frame
-    M[0:2, 2:] += target_center - source_center
+    t = target_center - source_center
+    M[0:2, 2:] += t
 
-    return M
+    return M, t, R
 
 
 def ransac_sample(source, target, k, n, seed=None):
@@ -106,26 +113,26 @@ def ransac_icp(source, target, k, n, threshold, d, seed=None):
     source_sample, target_sample = ransac_sample(source, target, k, n, seed)
 
     best_error = np.inf
-    best_M = icp_homo(source, target)
+    best_M, best_t, best_R = icp_homo(source, target)
     best_inliers = np.ones(source.shape[1], dtype=np.bool8)
 
     for k in range(source_sample.shape[0]):
-        M = icp_homo(source_sample[k], target_sample[k])
+        M, t, R = icp_homo(source_sample[k], target_sample[k])
         distance = rms(geo.transform_points(M, source), target, reduce=False)
         inlier_indx = distance < threshold
         N_inliers = np.count_nonzero(inlier_indx)
 
         if N_inliers > d:
             inlier_source, inlier_target = source[:, inlier_indx], target[:, inlier_indx]
-            M = icp_homo(inlier_source, inlier_target)
+            M, t, R = icp_homo(inlier_source, inlier_target)
             error = rms(geo.transform_points(M, inlier_source), inlier_target)
 
             if error < best_error:
                 best_error = error
-                best_M = M
+                best_M, best_t, best_R = M, t, R
                 best_inliers = inlier_indx
 
-    return best_M, best_inliers, best_error
+    return best_M, best_t, best_R, best_inliers, best_error
 
 
 def filter_kp(t0_kp_world, t0_rect_world, t1_kp_world, t1_rect_world):
@@ -148,7 +155,7 @@ def update_frame(t0, t1, k, n, threshold, d):
     rms_before = rms(t1_kp_w, t0_kp_w)
 
     # compute alignment and update the t1 frame
-    M, inliers, error = ransac_icp(source=t1_kp_w, target=t0_kp_w, k=k, n=n, threshold=threshold, d=d)
+    M, t, R, inliers, error = ransac_icp(source=t1_kp_w, target=t0_kp_w, k=k, n=n, threshold=threshold, d=d)
     t1.M = np.matmul(M, t1.M)
 
     return t1, M, inliers, {'rms': error, 'rms_before': rms_before}

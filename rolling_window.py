@@ -237,11 +237,12 @@ class Plotter:
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser = argparse.ArgumentParser(description='create egocentric maps')
     parser.add_argument("-ep", "--episode", type=int, default=0)
     parser.add_argument('-v', "--visualize", action='store_true', default=False)
-    parser.add_argument('-lb', "--look_behind", type=int, default=32)
+    parser.add_argument('-lb', "--look_behind", type=int, default=128)
     parser.add_argument('-la', "--look_ahead", type=int, default=128)
+    parser.add_argument('-ml', "--max_length", type=int, default=np.inf)
     args = parser.parse_args()
 
     episode = args.episode
@@ -255,7 +256,7 @@ if __name__ == '__main__':
     plot = Plotter(lim=1000, layout='default')
     trj = VehicleTrajectoryObs(episode, start=start_step)
     start = invert_M(trj.pose[0])
-    ep_len = trj.sdfs.shape[0]
+    ep_len = min(args.max_length, trj.sdfs.shape[0])
 
     window_size = lookahead + lookbehind
     lim = 1000

@@ -34,7 +34,10 @@ ax = fig.subplots(1, 1)
 
 source = np.matmul(se2(0.0, 0.1, radians(10.0)), homo(x, y))[0:2]
 
+ax.clear()
 ax.plot(*unstack(source))
+ax.plot(*unstack(target))
+plt.pause(4.0)
 
 while icp.rms(source, target) > 0.001:
     R, t = icp.icp(source, target)
