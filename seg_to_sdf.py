@@ -4,6 +4,8 @@ import cv2
 from scipy.ndimage import distance_transform_edt
 from tqdm import tqdm
 import argparse
+from PIL import Image
+from PIL.ImageOps import grayscale
 
 
 parser = argparse.ArgumentParser()
@@ -85,5 +87,10 @@ for state, state_mask, road, road_mask, segment, segment_mask in tqdm(zip(state_
         plt.pause(0.0001)
 
 if not args.dry_run:
-    np.savez(f'data/dataset/{args.episode}_segment_thresh', np.stack(segment_thresh_stack))
-    np.savez(f'data/dataset/{args.episode}_sdf2', np.stack(sdf2_stack))
+    for i, segment in enumerate(segment_thresh_stack):
+        image = Image.fromarray(segment.astype(np.uint8), mode='L')
+        image = grayscale(image)
+        image.save(f'data/road_segments/0/{args.episode}_{i}.PNG')
+
+    for i, sdf in enumerate(sdf2_stack):
+        np.savez(f'data/road_sdfs/0/{args.episode}_{i}', sdf)
