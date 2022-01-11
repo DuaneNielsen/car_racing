@@ -21,59 +21,38 @@ plt.ion()
 class Plot(pl.Callback):
     def __init__(self):
         super().__init__()
-        self.r, self.c = 4, 4
-        self.fig, self.ax = plt.subplots(self.r, self.c)
+        self.fig, self.ax = plt.subplots(3, 6)
         self.training_ax = self.ax[0]
-        self.training_images = []
-        self.samples_ax = [ax for row in self.ax[1:] for ax in row]
-        self.samples = []
+        self.samples_ax = self.ax[1]
+        self.samples_seeded_ax = self.ax[2]
 
-    def draw(self):
-
-        for img, ax in zip(self.training_images, self.training_ax):
-            ax.clear()
-            ax.imshow(img)
-
-        for img, ax in zip(self.samples, self.samples_ax):
-            ax.clear()
-            ax.imshow(img[0, 0, :, :])
-
-        plt.pause(0.05)
-
-    def on_train_batch_end(
-            self,
-            trainer: "pl.Trainer",
-            pl_module: "pl.LightningModule",
-            outputs,
-            batch: Any,
-            batch_idx: int,
-            unused: Optional[int] = 0,
-    ) -> None:
+    def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
+                           outputs, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
         if pl_module.global_step % 5 == 0:
-            loss, x, x_ = outputs['loss'], outputs['input'], outputs['generated']
-            self.training_images = [
-                x[0, 0].cpu(),
-                x_[0, 0].cpu(),
-                x[1, 0].cpu(),
-                x_[1, 0].cpu()
-            ]
-            self.draw()
+            loss, x, x_, mask = outputs['loss'], outputs['input'], outputs['generated'], outputs['mask']
+            training_images = [x[0, 0], mask[0, 0], x_[0, 0], x[1, 0], mask[1, 0], x_[1, 0]]
 
-    def on_validation_batch_end(
-            self,
-            trainer: "pl.Trainer",
-            pl_module: "pl.LightningModule",
-            outputs,
-            batch: Any,
-            batch_idx: int,
-            dataloader_idx: int,
-    ) -> None:
-        self.samples.append(outputs['sample'])
+            for img, ax in zip(training_images, self.training_ax):
+                ax.clear()
+                ax.imshow(img)
+
+            plt.pause(0.01)
+
+    def on_validation_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
+                                outputs, batch: Any, batch_idx: int, dataloader_idx: int) -> None:
+        seeded = outputs['seeded']
+        for i in range(len(self.samples_seeded_ax)):
+            self.samples_seeded_ax[i].clear()
+            if i < len(seeded):
+                self.samples_seeded_ax[i].imshow(seeded[i, 0])
+        plt.pause(0.01)
 
     def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        self.draw()
-        del self.samples
-        self.samples = []
+        samples = pl_module.sample(len(self.samples_ax)).cpu()
+        for i, ax in enumerate(self.samples_ax):
+            ax.clear()
+            ax.imshow(samples[i, 0, :, :])
+        plt.pause(0.01)
 
 
 def make_grid(image_list):
@@ -136,10 +115,9 @@ class WandbPlot(pl.Callback):
         self.samples.append(outputs['sample'])
 
     def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        samples = make_grid(self.samples)
+        samples = pl_module.sample(16)
+        samples = make_grid(samples)
         trainer.logger.experiment.log({"samples": wandb.Image(samples)})
-        del self.samples
-        self.samples = []
 
 
 class AODM(pl.LightningModule):
@@ -162,11 +140,14 @@ class AODM(pl.LightningModule):
         return torch.stack([torch.randperm(self.d, device=self.device).reshape(self.h, self.w) + 1 for _ in range(N)])
 
     def sigma_with_mask(self, mask):
-        # sigma = [1.. mask_pixels || randperm (remaining pixels) ]
-        sigma = torch.zeros((1, self.h, self.w), dtype=torch.long, device=self.device)
-        sigma[mask] = torch.arange(mask.sum()) + 1
-        sigma[~mask] = torch.randperm(self.d - mask.sum(), device=self.device) + mask.sum()
-        return sigma
+        sigma_stack = []
+        for m in mask:
+            # sigma = [1.. mask_pixels || randperm (remaining pixels) ]
+            sigma = torch.zeros_like(m, dtype=torch.long, device=self.device)
+            sigma[m] = torch.arange(m.sum(), device=self.device) + 1
+            sigma[~m] = torch.randperm(self.d - m.sum(), device=self.device) + m.sum()
+            sigma_stack += [sigma]
+        return torch.stack(sigma_stack)
 
     def training_step(self, batch, batch_idx):
         x, label = batch[0].float(), batch[1]
@@ -180,38 +161,43 @@ class AODM(pl.LightningModule):
         l = (1. - mask) * C.log_prob(torch.argmax(x, dim=1)).unsqueeze(1)
         n = 1. / (self.d - t + 1.)
         l = n * l.sum(dim=(1, 2, 3))
-        return {'loss': -l.mean(), 'input': x.detach(), 'generated': x_.detach()}
+        return {'loss': -l.mean(), 'input': x.detach().cpu(), 'generated': x_.detach().cpu(), 'mask': mask.cpu()}
 
     def training_step_end(self, o):
         self.log('loss', o['loss'])
 
-    def validation_step(self, *args, **kwargs) -> Optional:
-        sample = self.sample_one()
-        return {'sample': sample.cpu()}
+    def validation_step(self, batch, batch_idx) -> Optional:
+        x_seed, label = batch[0].float(), batch[1]
+        N, K, H, W = x_seed.shape
+        mask = torch.zeros((N, H, W), dtype=torch.bool, device=self.device)
+        mask[:, model.h // 2:, :] = True
+        x = self.sample_seeded(x_seed, mask)
+        return {'seeded': x.cpu()}
 
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)
         return [opt]
 
-    def sample_one(self):
-        x = torch.zeros(2, self.k, self.h, self.w, device=self.device)
-        sigma = self.sample_sigma(1)
+    def sample(self, N):
+        x = torch.zeros(N, self.k, self.h, self.w, device=self.device)
+        sigma = self.sample_sigma(N)
         for t in range(1, self.d + 1):
-            x = self.sample_step(x, t, sigma)
-        return x.squeeze()
-
-    def sample_one_seeded(self, x_seed, mask):
-
-        # add masked pixels to seed
-        x = torch.zeros(1, self.k, self.h, self.w, device=self.device)
-        x[mask] = x_seed[mask]
-        sigma = self.sigma_with_mask(mask)
-
-        for t in range(mask.sum(), self.d + 1):
             x = self.sample_step(x, t, sigma)
         return x
 
-    def sample_step(self, x, t, sigma):
+    def sample_seeded(self, x_seed, mask):
+
+        # add masked pixels to seed
+        x = torch.zeros_like(x_seed)
+        m = mask.unsqueeze(-1).repeat(1, 1, 1, self.k).permute(0, 3, 1, 2)
+        x[m] = x_seed[m]
+        sigma = self.sigma_with_mask(mask)
+
+        for t in range(1, self.d + 1):
+            x = self.sample_step(x, t, sigma, mask)
+        return x
+
+    def sample_step(self, x, t, sigma, mask=None):
         """
         Performs one step of the noise reversal transition function in order sigma at time t
         x: the current state
@@ -219,6 +205,9 @@ class AODM(pl.LightningModule):
         sigma: the order
         """
         past, current = sigma < t, sigma == t
+        if mask is not None:
+            current[mask] = False
+            past[mask] = True
         past, current = past.unsqueeze(1).float(), current.unsqueeze(1).float()
         logprobs = self((x * past))
         x_ = OneHotCategorical(logits=logprobs.permute(0, 2, 3, 1)).sample().permute(0, 3, 1, 2)
@@ -339,6 +328,6 @@ if __name__ == '__main__':
         trainer = pl.Trainer.from_argparse_args(args,
                                                 strategy=DDPPlugin(find_unused_parameters=False),
                                                 logger=wandb_logger,
-                                                callbacks=[Plot(), WandbPlot(), checkpoint_callback])
+                                                callbacks=[Plot(), checkpoint_callback])
 
         trainer.fit(model, datamodule=dm)
