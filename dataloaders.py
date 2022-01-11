@@ -11,6 +11,8 @@ import pytorch_lightning as pl
 from typing import Optional
 from math import ceil
 from torch.nn.functional import one_hot
+import cv2
+from scipy.ndimage import distance_transform_edt
 
 
 class ToSegment:
@@ -20,8 +22,34 @@ class ToSegment:
         return image
 
 
+def gradient(segment):
+    gradient_x = cv2.Sobel(segment, 3, dx=1, dy=0)
+    gradient_y = cv2.Sobel(segment, 3, dx=0, dy=1)
+    return cv2.addWeighted(gradient_x, 0.5, gradient_y, 0.5, 0.0)
+
+
+class ToSDF:
+    def __call__(self, segment):
+        segment = np.asarray(segment)
+
+        # Signed Distance Field
+        gradient_segment = gradient(segment.astype(float))
+        sdf = distance_transform_edt(gradient_segment == 0)
+        sign = segment.astype(float) * 2 - 1
+        sdf = sdf * sign
+        return sdf
+
+
 def road_segment_dataset(data_path):
     transforms = Compose([Grayscale(), CenterCrop(128), Resize(32), ToSegment()])
+    return torchvision.datasets.ImageFolder(
+        root=data_path,
+        transform=transforms
+    )
+
+
+def road_sdf_dataset(data_path):
+    transforms = Compose([Grayscale(), CenterCrop(128), Resize(32), ToSDF(), ToTensor()])
     return torchvision.datasets.ImageFolder(
         root=data_path,
         transform=transforms
@@ -72,7 +100,7 @@ class RoadSegmentDataModule(pl.LightningDataModule):
 
 if __name__ == '__main__':
 
-    train_dataset = NPZLoader('data/road_sdfs', transform=Compose([CenterCrop(128)]))
+    # train_dataset = NPZLoader('data/road_sdfs', transform=Compose([CenterCrop(128)]))
 
     # sdf_loader = torch.utils.data.DataLoader(
     #     train_dataset,
@@ -84,12 +112,24 @@ if __name__ == '__main__':
     #     plt.imshow(make_grid(data.unsqueeze(1), normalize=True).permute(1, 2, 0), cmap='jet')
     #     plt.pause(1.0)
 
-    road_segment_loader = torch.utils.data.DataLoader(
-        road_segment_dataset(data_path='data/road_segments/'),
+    # road_segment_loader = torch.utils.data.DataLoader(
+    #     road_segment_dataset(data_path='data/road_segments/'),
+    #     batch_size=64,
+    #     num_workers=0,
+    #     shuffle=True)
+    #
+    # for batch_idx, (data, target) in enumerate(road_segment_loader):
+    #     plt.imshow(make_grid(data, normalize=True).permute(1, 2, 0))
+    #     plt.pause(1.0)
+
+    road_sdf_loader = torch.utils.data.DataLoader(
+        road_sdf_dataset(data_path='data/road_segments/'),
         batch_size=64,
         num_workers=0,
         shuffle=True)
 
-    for batch_idx, (data, target) in enumerate(road_segment_loader):
+    for batch_idx, (data, target) in enumerate(road_sdf_loader):
+        plt.imshow(data[0].squeeze())
+        plt.pause(1.0)
         plt.imshow(make_grid(data, normalize=True).permute(1, 2, 0))
         plt.pause(1.0)
