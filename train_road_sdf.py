@@ -24,7 +24,7 @@ plt.ion()
 class Plot(pl.Callback):
     def __init__(self):
         super().__init__()
-        self.fig, self.ax = plt.subplots(3, 6)
+        self.fig, self.ax = plt.subplots(3, 10)
         self.training_ax = self.ax[0]
         self.samples_ax = self.ax[1]
         self.samples_seeded_ax = self.ax[2]
@@ -32,8 +32,10 @@ class Plot(pl.Callback):
     def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
                            outputs, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
         if pl_module.global_step % 5 == 0:
-            loss, x, x_, mask = outputs['loss'], outputs['input'], outputs['generated'], outputs['mask']
-            training_images = [x[0, 0], mask[0, 0], x_[0, 0], x[1, 0], mask[1, 0], x_[1, 0]]
+            loss, x, mask = outputs['loss'], outputs['input'], outputs['mask']
+            loc, scale, logprobs = outputs['loc'], outputs['scale'], outputs['logprobs']
+            training_images = [x[0, 0], mask[0, 0], logprobs[0].squeeze().exp(), loc[0], scale[0],
+                               x[1, 0], mask[1, 0], logprobs[1].squeeze().exp(), loc[1], scale[1]]
 
             for img, ax in zip(training_images, self.training_ax):
                 ax.clear()
@@ -124,7 +126,6 @@ class WandbPlot(pl.Callback):
 
 
 def logistic(loc, scale):
-    scale = softplus(scale) + torch.finfo(scale.dtype).eps
     lower, upper = torch.tensor([0.], device=loc.device), torch.tensor([1.], device=loc.device)
     base_distribution = distributions.Uniform(lower, upper)
     transforms = [SigmoidTransform().inv, AffineTransform(loc=loc, scale=scale)]
@@ -142,7 +143,9 @@ class AODM(pl.LightningModule):
 
     def forward(self, x):
         x_ = self.unet(x)
-        return torch.log_softmax(x_, dim=1)
+        loc, scale = x_.permute(0, 2, 3, 1).chunk(2, dim=-1)
+        scale = softplus(scale) + torch.finfo(scale.dtype).eps
+        return logistic(loc, scale), loc, scale
 
     def sample_t(self, N):
         return torch.randint(1, self.d + 1, (N, 1, 1), device=self.device)
@@ -167,13 +170,13 @@ class AODM(pl.LightningModule):
         sigma = self.sample_sigma(N)
         mask = sigma < t
         mask = mask.unsqueeze(1).float()
-        x_ = self(x * mask)
-        loc, scale = x_.permute(0, 2, 3, 1).chunk(2, dim=-1)
-        C = logistic(loc, scale)
-        l = (1. - mask) * C.log_prob(x.permute(0, 2, 3, 1))
+        C, loc, scale = self(x * mask)
+        logprobs = C.log_prob(x.permute(0, 2, 3, 1))
+        l = (1. - mask) * logprobs
         n = 1. / (self.d - t + 1.)
         l = n * l.sum(dim=(1, 2, 3))
-        return {'loss': -l.mean(), 'input': x.detach().cpu(), 'generated': x_.detach().cpu(), 'mask': mask.cpu()}
+        return {'loss': -l.mean(), 'input': x.detach().cpu(), 'loc': loc.detach().cpu(), 'mask': mask.cpu(),
+                'scale': scale.detach().cpu(), 'logprobs': logprobs.detach().cpu()}
 
     def training_step_end(self, o):
         self.log('loss', o['loss'])
@@ -221,7 +224,7 @@ class AODM(pl.LightningModule):
             current[mask] = False
             past[mask] = True
         past, current = past.unsqueeze(1).float(), current.unsqueeze(1).float()
-        C = logistic(*self((x * past)).permute(0, 2, 3, 1).chunk(2, dim=-1))
+        C, loc, scale = self(x * past)
         x_ = C.sample().permute(0, 3, 1, 2)
         x = x * (1 - current) + x_ * current
         return x

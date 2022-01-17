@@ -40,6 +40,14 @@ class ToSDF:
         return sdf
 
 
+class TruncateAndNormalize:
+    def __init__(self, min, max):
+        self.min, self.max = min, max
+
+    def __call__(self, sdf):
+        return (np.clip(sdf, self.min, self.max) - self.min) / (self.max - self.min)
+
+
 def road_segment_dataset(data_path):
     transforms = Compose([Grayscale(), CenterCrop(128), Resize(32), ToSegment()])
     return torchvision.datasets.ImageFolder(
@@ -49,7 +57,8 @@ def road_segment_dataset(data_path):
 
 
 def road_sdf_dataset(data_path):
-    transforms = Compose([Grayscale(), CenterCrop(128), Resize(32), ToSDF(), ToTensor()])
+    transforms = Compose([Grayscale(), CenterCrop(128), Resize(32),
+                          ToSDF(), ToTensor()])
     return torchvision.datasets.ImageFolder(
         root=data_path,
         transform=transforms
