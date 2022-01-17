@@ -98,6 +98,31 @@ class RoadSegmentDataModule(pl.LightningDataModule):
         raise NotImplementedError
 
 
+class RoadSDFDataModule(pl.LightningDataModule):
+    def __init__(self, data_dir: str = "path/to/dir", batch_size: int = 64):
+        super().__init__()
+        self.data_dir = data_dir
+        self.batch_size = batch_size
+        self.train, self.val = None, None
+
+    def setup(self, stage: Optional[str] = None):
+        full = road_sdf_dataset(data_path=self.data_dir)
+        train_size, val_size = len(full) * 9 // 10, ceil(len(full) / 10)
+        self.train, self.val = random_split(full, [train_size, val_size])
+
+    def train_dataloader(self):
+        return dataloader.DataLoader(self.train, batch_size=self.batch_size)
+
+    def val_dataloader(self):
+        return dataloader.DataLoader(self.val, batch_size=self.batch_size)
+
+    def predict_dataloader(self) -> EVAL_DATALOADERS:
+        raise NotImplementedError
+
+    def test_dataloader(self) -> EVAL_DATALOADERS:
+        raise NotImplementedError
+
+
 if __name__ == '__main__':
 
     # train_dataset = NPZLoader('data/road_sdfs', transform=Compose([CenterCrop(128)]))
