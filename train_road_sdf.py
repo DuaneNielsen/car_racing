@@ -21,6 +21,16 @@ from torch.nn.functional import softplus
 plt.ion()
 
 
+def data_training_end(outputs):
+    i = 0
+    while i < len(outputs['input']):
+        x, mask = outputs['input'][i], outputs['mask'][i]
+        loc, scale, logprobs = outputs['loc'][i], outputs['scale'][i], outputs['logprobs'][i]
+        probs = (torch.finfo(logprobs.dtype).eps + logprobs).exp()
+        yield torch.stack((x[0], mask[0], loc[:, :, 0], scale[:, :, 0], probs[:, :, 0])).unsqueeze(1)
+        i += 1
+
+
 class Plot(pl.Callback):
     def __init__(self):
         super().__init__()
@@ -32,14 +42,16 @@ class Plot(pl.Callback):
     def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
                            outputs, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
         if pl_module.global_step % 5 == 0:
-            loss, x, mask = outputs['loss'], outputs['input'], outputs['mask']
-            loc, scale, logprobs = outputs['loc'], outputs['scale'], outputs['logprobs']
-            training_images = [x[0, 0], mask[0, 0], logprobs[0].squeeze().exp(), loc[0], scale[0],
-                               x[1, 0], mask[1, 0], logprobs[1].squeeze().exp(), loc[1], scale[1]]
 
-            for img, ax in zip(training_images, self.training_ax):
-                ax.clear()
-                ax.imshow(img)
+            i = 0
+
+            for panel in data_training_end(outputs):
+                for img in panel:
+                    if i >= len(self.training_ax):
+                        break
+                    self.training_ax[i].clear()
+                    self.training_ax[i].imshow(img.squeeze())
+                    i += 1
 
             plt.pause(0.01)
 
@@ -60,69 +72,31 @@ class Plot(pl.Callback):
         plt.pause(0.01)
 
 
-def make_grid(image_list):
-    """
-    image_list: list C, H, W of 2, 28, 28 images
-    """
-    image_list = torch.stack(image_list)
-    image_list = image_list[:, 0, :, :]
-    image_list = image_list.unsqueeze(1)
-    image_grid = torchvision.utils.make_grid(image_list) * 255
-    return image_grid
-
-
 class WandbPlot(pl.Callback):
     def __init__(self):
         super().__init__()
-        self.training_images = []
         self.samples = []
 
-    def on_train_batch_end(
-            self,
-            trainer: "pl.Trainer",
-            pl_module: "pl.LightningModule",
-            outputs,
-            batch: Any,
-            batch_idx: int,
-            unused: Optional[int] = 0,
-    ) -> None:
+    def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
+                           outputs, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
         if pl_module.global_step % 1000 == 0:
-            loss, x, x_ = outputs['loss'], outputs['input'], outputs['generated']
 
-            training_input = make_grid([
-                x[0].cpu(),
-                x[1].cpu(),
-            ])
-
-            def exp_image(image):
-                return torch.exp(image + torch.finfo(image.dtype).eps)
-
-            training_output = make_grid([
-                exp_image(x_[0].cpu()),
-                exp_image(x_[1].cpu())
-            ])
-
-            panel = torch.cat((training_input, training_output), dim=1)
-
+            train_panel = torch.cat(list(data_training_end(outputs)))
+            train_panel = torchvision.utils.make_grid(train_panel)
             trainer.logger.experiment.log({
-                "train_panel": wandb.Image(panel),
+                "train_panel": wandb.Image(train_panel),
             })
 
-    def on_validation_batch_end(
-            self,
-            trainer: "pl.Trainer",
-            pl_module: "pl.LightningModule",
-            outputs,
-            batch: Any,
-            batch_idx: int,
-            dataloader_idx: int,
-    ) -> None:
-        self.samples.append(outputs['sample'])
+    def on_validation_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
+                                outputs, batch: Any, batch_idx: int, dataloader_idx: int) -> None:
+        self.samples.append(outputs['seeded'])
 
     def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+
         samples = pl_module.sample(16)
-        samples = make_grid(samples)
-        trainer.logger.experiment.log({"samples": wandb.Image(samples)})
+        samples = torchvision.utils.make_grid(samples)
+        seeded = torchvision.utils.make_grid(torch.cat(self.samples, dim=0))
+        trainer.logger.experiment.log({"samples": wandb.Image(samples), 'seeded': wandb.Image(seeded)})
 
 
 def logistic(loc, scale):
@@ -148,10 +122,10 @@ class AODM(pl.LightningModule):
         return logistic(loc, scale), loc, scale
 
     def sample_t(self, N):
-        return torch.randint(1, self.d + 1, (N, 1, 1), device=self.device)
+        return torch.randint(1, self.d + 1, (N, 1, 1, 1), device=self.device)
 
     def sample_sigma(self, N):
-        return torch.stack([torch.randperm(self.d, device=self.device).reshape(self.h, self.w) + 1 for _ in range(N)])
+        return torch.stack([torch.randperm(self.d, device=self.device).reshape(1, self.h, self.w) + 1 for _ in range(N)])
 
     def sigma_with_mask(self, mask):
         sigma_stack = []
@@ -169,7 +143,7 @@ class AODM(pl.LightningModule):
         t = self.sample_t(N)
         sigma = self.sample_sigma(N)
         mask = sigma < t
-        mask = mask.unsqueeze(1).float()
+        mask = mask.float()
         C, loc, scale = self(x * mask)
         logprobs = C.log_prob(x.permute(0, 2, 3, 1))
         l = (1. - mask) * logprobs
@@ -184,8 +158,8 @@ class AODM(pl.LightningModule):
     def validation_step(self, batch, batch_idx) -> Optional:
         x_seed, label = batch[0].float(), batch[1]
         N, K, H, W = x_seed.shape
-        mask = torch.zeros((N, H, W), dtype=torch.bool, device=self.device)
-        mask[:, model.h // 2:, :] = True
+        mask = torch.zeros((N, 1, H, W), dtype=torch.bool, device=self.device)
+        mask[:, :, model.h // 2:, :] = True
         x = self.sample_seeded(x_seed, mask)
         return {'seeded': x.cpu()}
 
@@ -204,7 +178,7 @@ class AODM(pl.LightningModule):
 
         # add masked pixels to seed
         x = torch.zeros_like(x_seed)
-        m = mask.unsqueeze(-1).repeat(1, 1, 1, self.k).permute(0, 3, 1, 2)
+        m = mask.repeat(1, self.k, 1, 1)
         x[m] = x_seed[m]
         sigma = self.sigma_with_mask(mask)
 
@@ -223,7 +197,7 @@ class AODM(pl.LightningModule):
         if mask is not None:
             current[mask] = False
             past[mask] = True
-        past, current = past.unsqueeze(1).float(), current.unsqueeze(1).float()
+        past, current = past.float(), current.float()
         C, loc, scale = self(x * past)
         x_ = C.sample().permute(0, 3, 1, 2)
         x = x * (1 - current) + x_ * current
@@ -343,6 +317,6 @@ if __name__ == '__main__':
         trainer = pl.Trainer.from_argparse_args(args,
                                                 strategy=DDPPlugin(find_unused_parameters=False),
                                                 logger=wandb_logger,
-                                                callbacks=[Plot(), checkpoint_callback])
+                                                callbacks=[WandbPlot(), Plot(), checkpoint_callback])
 
         trainer.fit(model, datamodule=dm)
