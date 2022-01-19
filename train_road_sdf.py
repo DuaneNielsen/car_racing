@@ -1,12 +1,9 @@
 import torch
-import torch.nn as nn
-from torch.distributions import Categorical, OneHotCategorical
 from matplotlib import pyplot as plt
 from pl_bolts.datamodules.binary_emnist_datamodule import BinaryEMNISTDataModule
 from typing import Any, Callable, cast, Dict, Iterable, List, Optional, Tuple, Union
 import torchvision.utils
 from argparse import ArgumentParser
-import torchmetrics
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pl_bolts.models.vision.unet import UNet
@@ -21,16 +18,6 @@ from torch.nn.functional import softplus
 plt.ion()
 
 
-def data_training_end(outputs):
-    i = 0
-    while i < len(outputs['input']):
-        x, mask = outputs['input'][i], outputs['mask'][i]
-        loc, scale, logprobs = outputs['loc'][i], outputs['scale'][i], outputs['logprobs'][i]
-        probs = (torch.finfo(logprobs.dtype).eps + logprobs).exp()
-        yield torch.stack((x[0], mask[0], loc[:, :, 0], scale[:, :, 0], probs[:, :, 0])).unsqueeze(1)
-        i += 1
-
-
 class Plot(pl.Callback):
     def __init__(self):
         super().__init__()
@@ -40,18 +27,17 @@ class Plot(pl.Callback):
         self.samples_seeded_ax = self.ax[2]
 
     def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
-                           outputs, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
+                           out, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
         if pl_module.global_step % 5 == 0:
 
-            i = 0
-
-            for panel in data_training_end(outputs):
-                for img in panel:
-                    if i >= len(self.training_ax):
+            for i in range(2):
+                panels = [out['input'][i, 0], out['mask'][i], out['loc'][i], out['scale'][i], out['probs'][i]]
+                for j, img in enumerate(panels):
+                    index = i * 5 + j
+                    if index >= len(self.training_ax):
                         break
-                    self.training_ax[i].clear()
-                    self.training_ax[i].imshow(img.squeeze())
-                    i += 1
+                    self.training_ax[index].clear()
+                    self.training_ax[index].imshow(img.squeeze())
 
             plt.pause(0.01)
 
@@ -73,19 +59,23 @@ class Plot(pl.Callback):
 
 
 class WandbPlot(pl.Callback):
-    def __init__(self):
+    def __init__(self, n_training_panels=8, train_panel_every_n_steps=1000):
         super().__init__()
         self.samples = []
+        self.n_training_panels = n_training_panels
+        self.train_panel_every_n_steps = train_panel_every_n_steps
 
     def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
-                           outputs, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
-        if pl_module.global_step % 1000 == 0:
+                           out, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
+        if pl_module.global_step % self.train_panel_every_n_steps == 0:
 
-            train_panel = torch.cat(list(data_training_end(outputs)))
-            train_panel = torchvision.utils.make_grid(train_panel)
-            trainer.logger.experiment.log({
-                "train_panel": wandb.Image(train_panel),
-            })
+            for key, value in out.items():
+                if key != 'loss':
+                    l = min(len(value), 16)
+                    train_panel = torchvision.utils.make_grid(out[key][:l])
+                    trainer.logger.experiment.log({
+                        key: wandb.Image(train_panel.squeeze(), caption=key),
+                    })
 
     def on_validation_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
                                 outputs, batch: Any, batch_idx: int, dataloader_idx: int) -> None:
@@ -145,12 +135,14 @@ class AODM(pl.LightningModule):
         mask = sigma < t
         mask = mask.float()
         C, loc, scale = self(x * mask)
-        logprobs = C.log_prob(x.permute(0, 2, 3, 1))
+        logprobs = C.log_prob(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
         l = (1. - mask) * logprobs
         n = 1. / (self.d - t + 1.)
         l = n * l.sum(dim=(1, 2, 3))
-        return {'loss': -l.mean(), 'input': x.detach().cpu(), 'loc': loc.detach().cpu(), 'mask': mask.cpu(),
-                'scale': scale.detach().cpu(), 'logprobs': logprobs.detach().cpu()}
+        return {'loss': -l.mean(), 'input': x.detach().cpu(), 'mask': mask.cpu(),
+                'loc': loc.detach().cpu().permute(0, 3, 1, 2),
+                'scale': scale.detach().cpu().permute(0, 3, 1, 2),
+                'probs': (logprobs.detach().cpu() + torch.finfo(logprobs.dtype).eps).exp()}
 
     def training_step_end(self, o):
         self.log('loss', o['loss'])
