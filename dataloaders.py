@@ -108,10 +108,13 @@ class RoadSegmentDataModule(pl.LightningDataModule):
 
 
 class RoadSDFDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir: str = "path/to/dir", batch_size: int = 64):
+    def __init__(self, data_dir: str = "path/to/dir",
+                 batch_size: int = 64,
+                 num_workers: int = 0):
         super().__init__()
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.num_workers = num_workers
         self.train, self.val = None, None
 
     def setup(self, stage: Optional[str] = None):
@@ -120,10 +123,10 @@ class RoadSDFDataModule(pl.LightningDataModule):
         self.train, self.val = random_split(full, [train_size, val_size])
 
     def train_dataloader(self):
-        return dataloader.DataLoader(self.train, batch_size=self.batch_size)
+        return dataloader.DataLoader(self.train, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return dataloader.DataLoader(self.val, batch_size=self.batch_size)
+        return dataloader.DataLoader(self.val, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def predict_dataloader(self) -> EVAL_DATALOADERS:
         raise NotImplementedError

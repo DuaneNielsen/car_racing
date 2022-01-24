@@ -13,7 +13,7 @@ python drive.py -ep 0
 
 Compute locally consistent poses for the episode using icp algorithm
 ```bash
-python generate_pose -ep 0
+python generate_pose.py -ep 0
 ```
 
 Fuse the trajectory into egocentric occupancy maps for each timestep

@@ -211,13 +211,14 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
-    parser = BinaryEMNISTDataModule.add_argparse_args(parser)
+    parser = RoadSDFDataModule.add_argparse_args(parser)
     parser.add_argument('--demo', default=None)
     parser.add_argument('--demo_seeded', default=None)
     parser.add_argument('--resume', default=None)
     args = parser.parse_args()
 
     wandb_logger = WandbLogger(project=project, log_model='all')
+
 
     if args.demo is not None:
 

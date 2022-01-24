@@ -6,7 +6,6 @@ import icp
 import geometry as geo
 import keypoints as kps
 from keypoints import extract_kp, extract_cv2_kp
-import synthworld
 import argparse
 
 """
