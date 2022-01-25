@@ -14,48 +14,52 @@ from dataloaders import RoadSDFDataModule
 from torch import distributions
 from torch.distributions.transforms import SigmoidTransform, AffineTransform
 from torch.nn.functional import softplus
-
-plt.ion()
+import cv2
+import numpy as np
 
 
 class Plot(pl.Callback):
-    def __init__(self):
+    def __init__(self, rows, cols):
         super().__init__()
-        self.fig, self.ax = plt.subplots(3, 10)
-        self.training_ax = self.ax[0]
-        self.samples_ax = self.ax[1]
-        self.samples_seeded_ax = self.ax[2]
+        self.fig = plt.figure()
+        self.gs = plt.GridSpec(rows, cols, self.fig)
+        self.i = 0
+        self.rows, self.cols = rows, cols
+        self.axes = {}
 
-    def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
-                           out, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
+    def update(self, out, pl_module):
         if pl_module.global_step % 5 == 0:
 
-            for i in range(2):
-                panels = [out['input'][i, 0], out['mask'][i], out['loc'][i], out['scale'][i], out['probs'][i]]
-                for j, img in enumerate(panels):
-                    index = i * 5 + j
-                    if index >= len(self.training_ax):
-                        break
-                    self.training_ax[index].clear()
-                    self.training_ax[index].imshow(img.squeeze())
+            for key in out:
+                if '_img' in key:
+                    if key not in self.axes:
+                        self.axes[key] = self.fig.add_subplot(self.gs[self.i // self.cols, self.i % self.cols])
+                        self.i += 1
+
+            for key, img in out.items():
+                if '_img' in key:
+                    self.axes[key].clear()
+                    self.axes[key].imshow(img[0].squeeze())
 
             plt.pause(0.01)
 
+    def on_train_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
+                           out, batch: Any, batch_idx: int, unused: Optional[int] = 0) -> None:
+        self.update(out, pl_module)
+
     def on_validation_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
                                 outputs, batch: Any, batch_idx: int, dataloader_idx: int) -> None:
-        seeded = outputs['seeded']
-        for i in range(len(self.samples_seeded_ax)):
-            self.samples_seeded_ax[i].clear()
-            if i < len(seeded):
-                self.samples_seeded_ax[i].imshow(seeded[i, 0])
-        plt.pause(0.01)
+        self.update(outputs, pl_module)
 
     def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
-        samples = pl_module.sample(len(self.samples_ax)).cpu()
-        for i, ax in enumerate(self.samples_ax):
-            ax.clear()
-            ax.imshow(samples[i, 0, :, :])
-        plt.pause(0.01)
+        samples = pl_module.sample(2).cpu().numpy()
+        self.update({'samples_img': samples}, pl_module)
+
+
+def apply_cmap(tensor, cmap=cv2.COLORMAP_JET):
+    normalized = (tensor / tensor.max()) * 255
+    gray = np.uint8(normalized.detach().cpu().numpy())
+    return cv2.applyColorMap(gray[0], cmap)
 
 
 class WandbPlot(pl.Callback):
@@ -70,23 +74,29 @@ class WandbPlot(pl.Callback):
         if pl_module.global_step % self.train_panel_every_n_steps == 0:
 
             for key, value in out.items():
-                if key != 'loss':
+                if '_img' in key:
                     l = min(len(value), 16)
                     train_panel = torchvision.utils.make_grid(out[key][:l])
+                    train_panel = apply_cmap(train_panel)
                     trainer.logger.experiment.log({
                         key: wandb.Image(train_panel.squeeze(), caption=key),
                     })
 
     def on_validation_batch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule",
                                 outputs, batch: Any, batch_idx: int, dataloader_idx: int) -> None:
-        self.samples.append(outputs['seeded'])
+        self.samples.append(outputs['seeded_img'])
 
     def on_validation_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
 
         samples = pl_module.sample(16)
         samples = torchvision.utils.make_grid(samples)
         seeded = torchvision.utils.make_grid(torch.cat(self.samples, dim=0))
+
+        samples = apply_cmap(samples)
+        seeded = apply_cmap(seeded)
+
         trainer.logger.experiment.log({"samples": wandb.Image(samples), 'seeded': wandb.Image(seeded)})
+        self.samples = []
 
 
 def logistic(loc, scale):
@@ -139,10 +149,12 @@ class AODM(pl.LightningModule):
         l = (1. - mask) * logprobs
         n = 1. / (self.d - t + 1.)
         l = n * l.sum(dim=(1, 2, 3))
-        return {'loss': -l.mean(), 'input': x.detach().cpu(), 'mask': mask.cpu(),
-                'loc': loc.detach().cpu().permute(0, 3, 1, 2),
-                'scale': scale.detach().cpu().permute(0, 3, 1, 2),
-                'probs': (logprobs.detach().cpu() + torch.finfo(logprobs.dtype).eps).exp()}
+        return {'loss': -l.mean(),
+                'input_img': x.detach().cpu(),
+                'mask_img': mask.cpu(),
+                'loc_img': loc.detach().cpu().permute(0, 3, 1, 2),
+                'scale_img': scale.detach().cpu().permute(0, 3, 1, 2),
+                'probs_img': (logprobs.detach().cpu() + torch.finfo(logprobs.dtype).eps).exp()}
 
     def training_step_end(self, o):
         self.log('loss', o['loss'])
@@ -153,7 +165,7 @@ class AODM(pl.LightningModule):
         mask = torch.zeros((N, 1, H, W), dtype=torch.bool, device=self.device)
         mask[:, :, model.h // 2:, :] = True
         x = self.sample_seeded(x_seed, mask)
-        return {'seeded': x.cpu()}
+        return {'seeded_img': x.cpu()}
 
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.lr)
@@ -310,6 +322,6 @@ if __name__ == '__main__':
         trainer = pl.Trainer.from_argparse_args(args,
                                                 strategy=DDPPlugin(find_unused_parameters=False),
                                                 logger=wandb_logger,
-                                                callbacks=[WandbPlot(), Plot(), checkpoint_callback])
+                                                callbacks=[WandbPlot(), Plot(4, 4), checkpoint_callback])
 
         trainer.fit(model, datamodule=dm)
