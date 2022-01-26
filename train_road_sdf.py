@@ -16,6 +16,7 @@ from torch.distributions.transforms import SigmoidTransform, AffineTransform
 from torch.nn.functional import softplus
 import cv2
 import numpy as np
+from itertools import chain
 
 
 class Plot(pl.Callback):
@@ -56,7 +57,7 @@ class Plot(pl.Callback):
         self.update({'samples_img': samples}, pl_module)
 
 
-def apply_cmap(tensor, cmap=cv2.COLORMAP_JET):
+def apply_cmap(tensor, cmap=cv2.COLORMAP_SUMMER):
     normalized = (tensor / tensor.max()) * 255
     gray = np.uint8(normalized.detach().cpu().numpy())
     return cv2.applyColorMap(gray[0], cmap)
@@ -149,7 +150,8 @@ class AODM(pl.LightningModule):
         l = (1. - mask) * logprobs
         n = 1. / (self.d - t + 1.)
         l = n * l.sum(dim=(1, 2, 3))
-        return {'loss': -l.mean(),
+        loss = -l.mean()
+        return {'loss': loss,
                 'input_img': x.detach().cpu(),
                 'mask_img': mask.cpu(),
                 'loc_img': loc.detach().cpu().permute(0, 3, 1, 2),
@@ -231,7 +233,6 @@ if __name__ == '__main__':
 
     wandb_logger = WandbLogger(project=project, log_model='all')
 
-
     if args.demo is not None:
 
         model = load_from_wandb_checkpoint(args.demo)
@@ -266,48 +267,25 @@ if __name__ == '__main__':
     elif args.demo_seeded is not None:
 
         model = load_from_wandb_checkpoint(args.demo_seeded)
-        fig = plt.figure()
-        spec = fig.add_gridspec(4, 4)
-        sample_ax = fig.add_subplot(spec[0:3, :])
-        progress_ax = fig.add_subplot(spec[3, :])
+        fig, axes = plt.subplots(4, 4)
+        axes = list(chain.from_iterable(axes))
+        device = 'cuda'
+        model = model.to(device)
 
         while True:
-            dm = BinaryEMNISTDataModule(batch_size=1)
+            dm = RoadSDFDataModule.from_argparse_args(args, batch_size=16)
             dm.setup('test')
             ds = dm.val_dataloader()
             for batch in ds:
                 # sample an image from batch
-                x_seed, label = batch[0], batch[1]
-                x_seed = torch.cat((x_seed, (1. - x_seed)), dim=1)
-
-                # mask the bit we want to seed with
-                mask = torch.zeros(model.h, model.w, dtype=torch.bool).squeeze(1)
-                mask[model.h // 2:, :] = True
-                mask = mask.reshape(model.h, model.w)
-
-                # push the seed to the initial state, and
-                x = torch.zeros(2, model.k, model.h, model.w, device=model.device)
-                x[:, :, mask] = x_seed[:, :, mask]
-
-                # construct a sigma that puts masked pixels at the start of sequence
-                sigma = model.sigma_with_mask(mask.unsqueeze(0))
-
-                # t starts at the non-mask pixels
-                for t in range(mask.sum(), model.d + 1):
-                    x = model.sample_step(x, t, sigma)
-
-                    if t % 100 == 0:
-                        sample_ax.clear()
-                        sample_ax.imshow(x[0, 0])
-                    if t % 20 == 0:
-                        progress_ax.clear()
-                        progress_ax.barh(1, t)
-                        progress_ax.set_xlim((0, model.d))
-                        plt.pause(0.01)
-                sample_ax.clear()
-                sample_ax.imshow(x[0, 0])
-                plt.pause(5.00)
-
+                x_seed, label = batch[0].to(device).float(), batch[1]
+                N, K, H, W = x_seed.shape
+                mask = torch.zeros((N, 1, H, W), dtype=torch.bool, device=x_seed.device)
+                mask[:, :, model.h // 2:, :] = True
+                x = model.sample_seeded(x_seed, mask)
+                for i, ax in enumerate(axes):
+                    ax.imshow(x[i].permute(1, 2, 0).detach().cpu())
+                plt.pause(10.0)
     else:
 
         pl.seed_everything(1234)

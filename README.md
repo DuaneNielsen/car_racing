@@ -30,3 +30,8 @@ Train order agnostic diffusion model of SDF
 ```bash
 python train_road_sdf.py --data_dir data/road_segments --gpus 2 --batch_size 64 --num_workers 32 --check_val_every_n_epoch 100 --max_epochs 2000
 ```
+
+Demo conditional SDF generator
+```bach
+python train_road_sdf.py  --data_dir data/road_segments --demo_seeded model-3mfaegf9:v1
+```
