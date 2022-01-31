@@ -167,6 +167,6 @@ if __name__ == '__main__':
 
     for batch_idx, (data, target) in enumerate(road_sdf_loader):
         plt.imshow(data[0].squeeze())
-        plt.pause(1.0)
+        plt.pause(5.0)
         plt.imshow(make_grid(data, normalize=True).permute(1, 2, 0))
-        plt.pause(1.0)
+        plt.pause(5.0)

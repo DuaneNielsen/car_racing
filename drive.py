@@ -112,7 +112,7 @@ while not done:
     plot.imshow(plot.road_plot, sdf_road)
 
     env.render()
-    plot.fig.canvas.draw()
+    plt.pause(0.01)
     episode_sdf += [sdf]
     episode_sdf_road += [sdf_road]
     episode_state += [state]

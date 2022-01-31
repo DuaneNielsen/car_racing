@@ -12,6 +12,6 @@ if __name__ == '__main__':
     for amap in maps:
         axes.clear()
         axes.imshow(amap[500:1500, 750:1750])
-        plt.pause(2.0)
+        plt.pause(7.0)
     plt.show()
 
