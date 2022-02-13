@@ -9,9 +9,10 @@ if __name__ == '__main__':
     fig = plt.figure(figsize=(18, 18))
     axes = fig.subplots(1)
 
-    for amap in maps:
+    for i, amap in enumerate(maps):
         axes.clear()
         axes.imshow(amap[500:1500, 750:1750])
+        fig.suptitle(f'map {i}')
         plt.pause(7.0)
     plt.show()
 

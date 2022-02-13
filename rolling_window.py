@@ -6,6 +6,7 @@ import scipy.interpolate as interpolate
 from tqdm import tqdm
 import cv2
 import argparse
+from statistics import mean
 
 
 def R(t):
@@ -118,7 +119,7 @@ class VehicleTrajectoryObs:
         self.state_grid = Grid(self.states.shape[1:3])
 
     def get_step(self, t):
-        return trj.sdfs[t], trj.sdfs_road[t], trj.states[t], trj.segment[t], trj.pose[t]
+        return trj.sdfs[t], trj.sdfs_road[t], trj.states[t], trj.segment[t], trj.pose[t], trj.rms[t]
 
 
 def interpolate_to_grid(pose, image, dest_grid):
@@ -175,7 +176,7 @@ class Plotter:
         self.ax_map_sdf_mask, self.ax_map_state_mask, self.ax_map_road_mask, self.ax_map_segment_mask = None, None, None, None
 
         if layout == 'default':
-            gs = self.fig.add_gridspec(12, 7)
+            gs = self.fig.add_gridspec(15, 7)
             self.ax_sdf = self.fig.add_subplot(gs[0:3, 6])
             self.ax_state = self.fig.add_subplot(gs[3:6, 6])
             self.ax_road = self.fig.add_subplot(gs[6:9, 6])
@@ -190,6 +191,11 @@ class Plotter:
             self.ax_map_state_mask = self.fig.add_subplot(gs[3:6, 0:3])
             self.ax_map_road_mask = self.fig.add_subplot(gs[6:9, 0:3])
             self.ax_map_segment_mask = self.fig.add_subplot(gs[9:12, 0:3])
+
+            self.ax_max_error = self.fig.add_subplot(gs[12:15, :])
+
+        elif layout == 'error':
+            self.ax_max_error = self.fig.add_subplot(1, 1, 1)
 
         elif layout == 'sdf_map':
             self.ax_map_sdf = self.fig.add_subplot(1, 1, 1)
@@ -231,6 +237,14 @@ class Plotter:
         if ax is not None:
             ax.scatter(points[0], points[1])
 
+    def update_error(self, max_error_stack, min_error_stack, mean_error_stack):
+        if self.ax_max_error is not None:
+            self.ax_max_error.clear()
+            x = list(range(len(max_error_stack)))
+            self.ax_max_error.plot(x, max_error_stack)
+            self.ax_max_error.plot(x, min_error_stack)
+            self.ax_max_error.plot(x, mean_error_stack)
+
     def update(self):
         self.fig.canvas.draw()
 
@@ -243,17 +257,17 @@ if __name__ == '__main__':
     parser.add_argument('-lb', "--look_behind", type=int, default=128)
     parser.add_argument('-la', "--look_ahead", type=int, default=128)
     parser.add_argument('-ml', "--max_length", type=int, default=np.inf)
+    parser.add_argument('-l', "--layout", type=str, default='default')
     args = parser.parse_args()
 
     episode = args.episode
     lookbehind = args.look_behind
     lookahead = args.look_ahead
     start_step = 70
-    visualize = args.visualize
 
     m = M(jnp.array([1., 1., 0]))
 
-    plot = Plotter(lim=1000, layout='default')
+    plot = Plotter(lim=1000, layout=args.layout)
     trj = VehicleTrajectoryObs(episode, start=start_step)
     start = invert_M(trj.pose[0])
     ep_len = min(args.max_length, trj.sdfs.shape[0])
@@ -270,26 +284,33 @@ if __name__ == '__main__':
         return jnp.matmul(M(jnp.array([lim / 2, lim / 2, 0.])), pose)
 
     sdf_stack, sdf_road_stack, state_stack, sdf_mask_stack, sdf_road_mask_stack, state_mask_stack = [], [], [], [], [], []
-    segment_stack, segment_mask_stack = [], []
+    segment_stack, segment_mask_stack, rms_stack = [], [], []
+    max_error_stack, min_error_stack, mean_error_stack = [], [], []
 
     for t in tqdm(range(ep_len)):
 
         t_tail, t_middle, t_head = t-window_size, t-lookahead, t
 
-        sdf, sdf_road, state, segment, pose = trj.get_step(t_head)
+        sdf, sdf_road, state, segment, pose, rms = trj.get_step(t_head)
+        rms_stack.append(rms)
 
         pose = to_world(pose)
 
         if t_tail >= 0:
-            sdf_tail, sdf_road_tail, state_tail, segment_tail, pose_tail = trj.get_step(t_tail)
+            sdf_tail, sdf_road_tail, state_tail, segment_tail, pose_tail, _ = trj.get_step(t_tail)
             pose_tail = to_world(pose_tail)
 
-            sdf_middle, sdf_road_middle, state_middle, segment_middle, pose_middle = trj.get_step(t_middle)
+            sdf_middle, sdf_road_middle, state_middle, segment_middle, pose_middle, _ = trj.get_step(t_middle)
             pose_middle = to_world(pose_middle)
+            rms_stack.pop(0)
 
         else:
             sdf_tail, sdf_road_tail, state_tail, segment_tail, pose_tail = None, None, None, None, None
             sdf_middle, sdf_road_middle, state_middle, segment_middle, pose_middle = None, None, None, None, None
+
+        max_error_stack.append(max(rms_stack))
+        min_error_stack.append(min(rms_stack))
+        mean_error_stack.append(mean(rms_stack))
 
         # write to map
         map_sdf.integrate(pose, sdf, pose_tail, sdf_tail)
@@ -343,7 +364,7 @@ if __name__ == '__main__':
             state_mask_stack += [centered_state_mask]
             segment_mask_stack += [centered_segment_mask]
 
-            if visualize:
+            if args.visualize:
                 plot.clear()
 
                 # show images
@@ -363,6 +384,7 @@ if __name__ == '__main__':
                 plot.draw_map(plot.ax_map_state_mask, centered_state_mask)
                 plot.draw_map(plot.ax_map_state_mask, centered_state_mask)
                 plot.draw_map(plot.ax_map_segment_mask, centered_segment_mask)
+                plot.update_error(max_error_stack, min_error_stack, mean_error_stack)
 
                 C = jnp.array([
                     [1., 0., 47.],
@@ -391,6 +413,6 @@ if __name__ == '__main__':
     save('state_mask_stack', state_mask_stack)
     save('segment_stack', segment_stack)
     save('segment_mask_stack', segment_mask_stack)
-
+    save('max_error_stack', max_error_stack)
 
 
