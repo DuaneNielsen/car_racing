@@ -1,11 +1,11 @@
 import gym
 from matplotlib import pyplot as plt
-import cv2
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 from pyglet.window import key
-import env
 import argparse
+
+from vision_utils import road_segment, gradient, road_distance_field
 
 """
 Drive a car around the track and generate a dataset
@@ -93,12 +93,6 @@ while not done:
     segment = (road | bushes).astype(float)
     plot.imshow(plot.segment_plot, segment)
 
-    def gradient(segment):
-        # Scharr the edges
-        gradient_x = cv2.Sobel(segment, 3, dx=1, dy=0)
-        gradient_y = cv2.Sobel(segment, 3, dx=0, dy=1)
-        return cv2.addWeighted(gradient_x, 0.5, gradient_y, 0.5, 0.0)
-
     gradient_segment = gradient(segment)
     plot.imshow(plot.gradient_plot, gradient_segment)
 
@@ -109,7 +103,7 @@ while not done:
     sdf_road = distance_transform_edt(gradient(road.astype(float)) == 0)
     sign_road = road * 2 - 1
     sdf_road = sdf_road * sign_road
-    plot.imshow(plot.road_plot, sdf_road)
+    plot.imshow(plot.road_plot, road_distance_field(observation=state[:60], segment_func=road_segment)[0])
 
     env.render()
     plt.pause(0.01)

@@ -1,10 +1,8 @@
 import torch
 from torch.nn.functional import interpolate
-import numpy as np
 from matplotlib import pyplot as plt
 import dataloaders
 from math import sin, cos, radians
-from torch import stack
 
 
 def ray_march(origin, vec, sdf, initial_polarity):
