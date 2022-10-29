@@ -49,15 +49,15 @@ env.viewer.window.on_key_release = key_release
 fig, axes = plt.subplots(1, 2)
 plt_steer, plt_spd = axes
 
+num_beams = 13
 origins = torch.tensor([
-    [60., 60., 60., 60., 60.],
-    [48., 48., 48., 48., 48.],
+    [60.]*num_beams,
+    [48.]*num_beams,
 ]).T
 angles = torch.tensor(
-    [radians(180. + 45.), radians(180. + 27.), radians(180.), radians(180. - 27.), radians(180. - 45.)])
-steering_directions = ['hard_left', 'easy_left', 'straight', 'easy_right', 'hard_right']
-steering_directions_a = [-1.0, -0.5, 0., 0.5, 1.0]
-steering_speed = ['brake', 'pedal_off', 'pedal_on']
+    [radians(180. + theta) for theta in torch.linspace(35., -35, num_beams)]
+)
+steering_directions_a = torch.linspace(-1., 1., num_beams)
 
 
 def angle_to_norm(angle):
@@ -121,7 +121,7 @@ def sphere_march(origin, vec, sdf, iterations=6):
 
 def max_beam(distance, end):
     i = torch.argmax(distance)
-    return i, angles[i], distance[i], end[i], steering_directions[i], steering_directions_a[i]
+    return i, angles[i], distance[i], end[i], steering_directions_a[i]
 
 
 class Speedo:
@@ -144,28 +144,29 @@ done = False
 while True:
     obs, reward, done, info = env.step(a)
     sdf, sign = vision_utils.road_distance_field(obs, vision_utils.road_segment)
-    sdf = sdf
     sdf = torch.from_numpy(sdf)
     end, distance = sphere_march(origins, vec_norm, sdf)
-    argmax, steering_angle, steering_distance, steering_end, steering_direction, steering_a = max_beam(distance, end)
-    a[0] = steering_a
-    speed = speedo.speed(distance)
-    a[1] = 0.3 if speed[2] > -2. else 0.0
-    a[2] = 0.7 if speed[2] < -3. else 0.0
+    #argmax, angle, beam_distance, end, steering_angle = max_beam(distance, end)
+    i = torch.argmax(distance)
+    #angles[i], distance[i], end[i], steering_directions_a[i]
+    a[0] = steering_directions_a[i]
+    speed = speedo.speed(distance[i])
+    a[1] = 0.3 if speed > -2. else 0.0
+    a[2] = 0.7 if speed < -3. else 0.0
 
 
     plt_steer.clear()
     plt_steer.imshow(sdf.T)
     line = torch.stack((origins, end), dim=-1)
-    for i in range(line.shape[0]):
+    for l in range(line.shape[0]):
         color='blue'
-        if i == argmax:
+        if l == i:
             color = 'red'
-        plt_steer.plot(line[i, 0], line[i, 1], color=color)
+        plt_steer.plot(line[l, 0], line[l, 1], color=color)
 
     plt_spd.clear()
     plt_spd.imshow(sdf.T)
-    color = 'red' if speed[2] < -3. else 'blue'
+    color = 'red' if speed < -3. else 'blue'
     plt_spd.plot(line[2, 0], line[2, 1], color=color)
     plt.pause(0.01)
     env.render()

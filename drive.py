@@ -4,6 +4,7 @@ import numpy as np
 from scipy.ndimage import distance_transform_edt
 from pyglet.window import key
 import argparse
+import env
 
 from vision_utils import road_segment, gradient, road_distance_field
 

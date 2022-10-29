@@ -32,6 +32,11 @@ python train_road_sdf.py --data_dir data/road_segments --gpus 2 --batch_size 64 
 ```
 
 Demo conditional SDF generator
-```bach
+```bash
 python train_road_sdf.py  --data_dir data/road_segments --demo_seeded model-3mfaegf9:v1
+```
+
+Demo P control using lidar
+```bash
+python car_p_control.py
 ```
