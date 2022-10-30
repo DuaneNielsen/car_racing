@@ -394,7 +394,8 @@ class CarRacing(gym.Env, EzPickle):
 
         x, y = self.car.hull.position
         theta = self.car.hull.angle
-        return self.state, step_reward, done, {'pos': (x, y, theta)}
+        speed = self.car.hull.linearVelocity
+        return self.state, step_reward, done, {'pos': (x, y, theta), 'speed': speed }
 
     def render(self, mode="human"):
         assert mode in ["human", "state_pixels", "rgb_array"]
