@@ -6,3 +6,5 @@ gym.register(
     max_episode_steps=1000,
     reward_threshold=900,
 )
+
+gym.register(id="racer-v0", entry_point="env.gym_racer:RacerEnv")
