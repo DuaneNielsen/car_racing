@@ -57,69 +57,59 @@ if __name__ == '__main__':
     from matplotlib import pyplot as plt
     from matplotlib.patches import Polygon
 
-    start = torch.tensor([
-        [0., 4.],
-        [1., -1.]
-    ])
-
-    end = torch.tensor([
-        [1., 1.],
-        [3., -3.]
-    ])
-
-    triangle = torch.tensor([
-        [0.5, 0.75, 0.5],
-        [2.5, 1.75, 1.]
-    ])
-
-    quad = torch.tensor([
-        [3., 3., 2., 2.],
-        [-1.5, -2.75, -2.75, -1.5]
-    ])
-
 
     def clip_line_segment_by_poly(start, end, clipping_poly):
+        with torch.no_grad():
+            # Cyrus Beck algorithm
+            # P0 - PEi
+            # P0: start point of the line segment
+            # P1: end point of the line segment
+            # PEi: the vertices of the polygon
+            _, M = start.shape
+            _, N = clipping_poly.shape
+            start = start.T.unsqueeze(1)
+            end = end.T.unsqueeze(1)
+            clipping_poly = clipping_poly.T
 
-        # Cyrus Beck algorithm
-        # P0 - PEi
-        # P0: start point of the line segment
-        # P1: end point of the line segment
-        # PEi: the vertices of the polygon
-        start_minus_tri = start - clipping_poly
-        end_minus_start = end - start
+            start_minus_tri = start - clipping_poly
+            end_minus_start = end - start
 
-        # Ni -> compute outward facing Normals of the edges of the polygon
-        edge_normals = normal(*edges(clipping_poly))
+            # Ni -> compute outward facing Normals of the edges of the polygon
+            edge_normals = normal(*edges(clipping_poly.T)).T
 
-        # Ni dot (P0 - PEi)
-        start_minus_verts_dot = (edge_normals * start_minus_tri).sum(0)  # dot product if orthonormal basis!
+            # Ni dot (P0 - PEi)
+            start_minus_verts_dot = (edge_normals * start_minus_tri).sum(-1)  # dot product if orthonormal basis!
 
-        # Ni dot (P1 - P0)
-        end_minus_start_dot = - (edge_normals * end_minus_start).sum(0)  # dot product
+            # Ni dot (P1 - P0)
+            end_minus_start_dot = - (edge_normals * end_minus_start).sum(-1)  # dot product
 
-        # t_values = Ni dot (P0 - PEi) / - Ni dot (P1 - P0)
-        t_value = start_minus_verts_dot / end_minus_start_dot
+            # t_values = Ni dot (P0 - PEi) / - Ni dot (P1 - P0)
+            t_value = start_minus_verts_dot / end_minus_start_dot
 
-        t_greater = t_value[end_minus_start_dot > 0.]
-        t_lesser = t_value[end_minus_start_dot < 0.]
+            # t_greater = t_value[:, end_minus_start_dot > 0.]
+            # t_lesser = t_value[:, end_minus_start_dot < 0.]
+            # t_greater = torch.cat((t_greater, torch.zeros(1)))
+            # t_lesser = torch.cat((t_lesser, torch.ones(1)))
 
-        # max must be greater than one and max t_lesser must be less than zero
-        t_greater = torch.cat((t_greater, torch.zeros(1)))
-        t_lesser = torch.cat((t_lesser, torch.ones(1)))
+            t_greater = t_value.clone()
+            t_lesser = t_value.clone()
 
-        t_g = torch.max(t_greater)
-        t_l = torch.min(t_lesser)
+            # min value of greater is 0, max value of lesser is 1.
+            t_greater[~end_minus_start_dot.gt(0.)] = 0.
+            t_lesser[~end_minus_start_dot.lt(0.)] = 1.
 
-        m, b = to_parametric(start, end)
-        p_g = m * t_g + b
-        p_l = m * t_l + b
+            t_g, _ = torch.max(t_greater, dim=1)
+            t_l, _ = torch.min(t_lesser, dim=1)
 
-        segments = torch.stack((start[:, 0:1], p_g, p_l, end[:, 0:1]))
-        return segments
+            m, b = to_parametric(start.squeeze().T, end.squeeze().T)
+            p_g = m * t_g + b
+            p_l = m * t_l + b
+
+            segments = torch.stack((start.squeeze().T, p_g, p_l, end.squeeze().T))
+            return segments
 
 
     # plotting
-
     fig, axes = plt.subplots(2, 1)
     axes[0].set_aspect('equal', adjustable='box')
     axes[1].set_aspect('equal', adjustable='box')
@@ -137,16 +127,49 @@ if __name__ == '__main__':
         for i in range(len(segments)-1):
             ax.plot(segments[i:i+2, 0], segments[i:i+2, 1], color=color[i])
 
+    # define triangle and line segs
+    start = torch.tensor([
+        [0, 0],
+        [1, 1]
+    ])
+
+    end = torch.tensor([
+        [1, 1],
+        [3, 1.5]
+    ])
+
+    triangle = torch.tensor([
+        [0.5, 0.75, 0.5],
+        [2.5, 1.75, 1.]
+    ])
+
     # plot triangle
     axes[0].add_patch(Polygon(triangle.T))
-    plot_normals(axes[0], triangle)
-    segments = clip_line_segment_by_poly(start[:, 0:1], end[:, 0:1], triangle)
+    # plot_normals(axes[0], triangle)
+    segments = clip_line_segment_by_poly(start, end, triangle)
     plot_line_segments(axes[0], segments)
+
+    # define quad and line segs
+    start = torch.tensor([
+        [4.],
+        [-1.]
+    ])
+
+    end = torch.tensor([
+        [1.],
+        [-3.]
+    ])
+
+    quad = torch.tensor([
+        [3., 3., 2., 2.],
+        [-1.5, -2.75, -2.75, -1.5]
+    ])
+
 
     # plot quad
     axes[1].add_patch(Polygon(quad.T))
-    plot_normals(axes[1], quad)
-    segments = clip_line_segment_by_poly(start[:, 1:2], end[:, 1:2], quad)
+    # plot_normals(axes[1], quad)
+    segments = clip_line_segment_by_poly(start, end, quad)
     plot_line_segments(axes[1], segments)
 
     plt.show()
