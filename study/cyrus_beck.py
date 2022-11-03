@@ -59,6 +59,9 @@ if __name__ == '__main__':
 
 
     def clip_line_segment_by_poly(start, end, clipping_poly):
+        """
+
+        """
         with torch.no_grad():
             # Cyrus Beck algorithm
             # P0 - PEi
@@ -82,37 +85,36 @@ if __name__ == '__main__':
 
             # Ni dot (P1 - P0)
             end_minus_start_dot = - (edge_normals * end_minus_start).sum(-1)  # dot product
+            end_minus_start_dot[end_minus_start_dot == 0.] = -1.  # ignore zero denominator
 
             # t_values = Ni dot (P0 - PEi) / - Ni dot (P1 - P0)
             t_value = start_minus_verts_dot / end_minus_start_dot
-
-            # t_greater = t_value[:, end_minus_start_dot > 0.]
-            # t_lesser = t_value[:, end_minus_start_dot < 0.]
-            # t_greater = torch.cat((t_greater, torch.zeros(1)))
-            # t_lesser = torch.cat((t_lesser, torch.ones(1)))
-
-            t_greater = t_value.clone()
-            t_lesser = t_value.clone()
+            t_positive = t_value.clone()
+            t_negative = t_value.clone()
 
             # min value of greater is 0, max value of lesser is 1.
-            t_greater[~end_minus_start_dot.gt(0.)] = 0.
-            t_lesser[~end_minus_start_dot.lt(0.)] = 1.
+            t_positive[~end_minus_start_dot.ge(0.)] = 0.
+            t_negative[~end_minus_start_dot.lt(0.)] = 1.
 
-            t_g, _ = torch.max(t_greater, dim=1)
-            t_l, _ = torch.min(t_lesser, dim=1)
+            t_enter, _ = torch.max(t_positive, dim=1)
+            t_exit, _ = torch.min(t_negative, dim=1)
 
-            m, b = to_parametric(start.squeeze().T, end.squeeze().T)
-            p_g = m * t_g + b
-            p_l = m * t_l + b
+            inside = ~t_enter.gt(t_exit)
 
-            segments = torch.stack((start.squeeze().T, p_g, p_l, end.squeeze().T))
-            return segments
+            m, b = to_parametric(start.squeeze(1).T, end.squeeze(1).T)
+            p_enter = m * t_enter + b
+            p_exit = m * t_exit + b
+
+            return torch.stack((p_enter.T, p_exit.T), dim=1), inside
+            # segments = torch.stack((start.squeeze().T, p_g, p_l, end.squeeze().T))
+            # return segments
 
 
     # plotting
     fig, axes = plt.subplots(2, 1)
     axes[0].set_aspect('equal', adjustable='box')
     axes[1].set_aspect('equal', adjustable='box')
+
 
     def plot_normals(ax, poly):
         midpoints = midpoint(*edges(poly))
@@ -122,20 +124,24 @@ if __name__ == '__main__':
             line_segment = torch.stack((midpoints[:, i], mid_normal_ends[:, i]), dim=1)
             ax.plot(line_segment[0], line_segment[1], color='green')
 
-    def plot_line_segments(ax, segments):
+
+    def plot_line_segments(ax, segments, inside):
         color = ['blue', 'red', 'blue']
-        for i in range(len(segments)-1):
-            ax.plot(segments[i:i+2, 0], segments[i:i+2, 1], color=color[i])
+        for i in range(len(segments)):
+            if inside[i]:
+                ax.plot(segments[i, :, 0], segments[i, :, 1], color='red')
+                print(segments[i, :, :])
+
 
     # define triangle and line segs
     start = torch.tensor([
-        [0, 0],
-        [1, 1]
+        [0, 0, 0, 0],
+        [1, 1, 1, 0.5]
     ])
 
     end = torch.tensor([
-        [1, 1],
-        [3, 1.5]
+        [1, 1.0, 0., 1],
+        [3, 1.5, 2., 1.1]
     ])
 
     triangle = torch.tensor([
@@ -146,8 +152,8 @@ if __name__ == '__main__':
     # plot triangle
     axes[0].add_patch(Polygon(triangle.T))
     # plot_normals(axes[0], triangle)
-    segments = clip_line_segment_by_poly(start, end, triangle)
-    plot_line_segments(axes[0], segments)
+    segments, inside = clip_line_segment_by_poly(start, end, triangle)
+    plot_line_segments(axes[0], segments, inside)
 
     # define quad and line segs
     start = torch.tensor([
@@ -165,11 +171,10 @@ if __name__ == '__main__':
         [-1.5, -2.75, -2.75, -1.5]
     ])
 
-
     # plot quad
     axes[1].add_patch(Polygon(quad.T))
     # plot_normals(axes[1], quad)
-    segments = clip_line_segment_by_poly(start, end, quad)
-    plot_line_segments(axes[1], segments)
+    segments, inside = clip_line_segment_by_poly(start, end, quad)
+    plot_line_segments(axes[1], segments, inside)
 
     plt.show()
