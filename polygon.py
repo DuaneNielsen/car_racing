@@ -9,11 +9,6 @@ def to_parametric(start, end):
     return m, b
 
 
-def normal(start, end):
-    m, b = to_parametric(start, end)
-    return m.norm()
-
-
 def compute_intersection(p1, p2, p3, p4):
     """
     given points p1 and p2 on line L1, compute the equation of L1 in the
@@ -153,7 +148,10 @@ class PolygonClipper:
             return False
 
     def clip(self, subject_polygon, clipping_polygon):
-
+        """
+        subject_polygon = [(x_1, y_1), (x_2, y_2), ..., (x_N, y_N)]
+        clipping_polygon = [(x_1,y_1),(x_2,y_2),...,(x_K,y_K)]
+        """
         final_polygon = subject_polygon.copy()
 
         for i in range(len(clipping_polygon)):
