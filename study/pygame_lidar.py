@@ -1,11 +1,10 @@
 import pygame, sys
 from pygame.locals import *
-from pygame import Vector2
 import math
 import numpy as np
 from gym.utils import seeding
-import polygon
 import torch
+from polygon import Polygon, Vector2, clip_line_segment_by_poly, rotate2D
 
 
 def create_track(seed):
@@ -244,32 +243,57 @@ def main():
 
     track, track_colors, road_left, road_right = create_track(1)
 
+    car = Polygon([
+        [4., 4., -4., -4.],
+        [7, -7., -7., 7]
+    ], pos=Vector2(550, 540), scale=Vector2(1.5, 1.5))
+
     theta = 0
     while True:
         clock.tick(100)
-
         DISPLAY.fill(LIGHT_GREEN)
-        world_track = 3 * track + np.array([[450., 400.]])
+        world_track = 8 * track + np.array([[450., 100.]])
+
         for poly, color in zip(world_track, track_colors):
             pygame.draw.polygon(DISPLAY, color, poly)
 
-        # cool animation of scan lines
-        if theta > np.pi:
-            sweep = np.sin(theta - np.pi) * 400 + 100
-            start, end = torch.tensor([[0, sweep, ]]), torch.tensor([[1280, sweep]])
-        else:
-            sweep = np.sin(theta) * 800 + 150
-            start, end = torch.tensor([[sweep, 0]]), torch.tensor([[sweep, 765]])
-        pygame.draw.line(DISPLAY, BLUE, start[0].tolist(), end[0].tolist(), width=8)
+        car.theta = theta
+        pygame.draw.polygon(DISPLAY, RED, car.pygame_world_verts)
+
+        start, end = car.pos + Vector2(0, 0.), car.pos + Vector2(0., 200.).rotate(car.theta)
+        pygame.draw.line(DISPLAY, BLUE, start.pygame, end.pygame, width=2)
 
         # segment the scan line
-        start_seg, end_seg, mask = polygon.clip_line_segment_by_poly(start, end, torch.from_numpy(world_track))
-        start_seg, end_seg, mask = start_seg.flatten(0, 1), end_seg.flatten(0, 1), mask.flatten(0, 1)
+        start_seg, end_seg, mask = clip_line_segment_by_poly(start.v, end.v, torch.from_numpy(world_track))
+
+        def contiguous_len(start_seg, end_seg, mask):
+            v_from = end_seg - start_seg
+
+
+            """
+            start_seg (N, P, 2)
+            end_seg (N, P, 2)
+            mask (N, P, 1)
+            """
+            N, P, _ = start_seg.shape
+            contig_lines = []
+            for p in range(P):
+                line_seg = []
+                for n in range(N):
+                    if not mask[n, p]:
+                        break
+                    line_seg += [start_seg[n, p], end_seg[n, p]]
+                contig_lines += [line_seg]
+            return contig_lines
+
+        contig_lines = contiguous_len(start_seg, end_seg, mask)
+
+        # start_seg, end_seg, mask = start_seg.flatten(0, 1), end_seg.flatten(0, 1), mask.flatten(0, 1)
 
         # draw the segments that intersect in a RED color
         for i in range(start_seg.size(0)):
             if mask[i]:
-                pygame.draw.line(DISPLAY, RED, start_seg[i].tolist(), end_seg[i].tolist(), width=8)
+                pygame.draw.line(DISPLAY, RED, start_seg[i].tolist(), end_seg[i].tolist(), width=2)
 
         theta += 0.002
         theta = theta % (np.pi * 2)

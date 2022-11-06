@@ -1,12 +1,127 @@
-import numpy as np
-import warnings
-from pygame import Vector2
+import torch
+from torch import cos, sin
+
+"""
+Line segs are tuples of (N, 2) start, (N, 2) end tensors
+Polygons are in (P, V, 2) tensor -> P - polygon, V - vertices, 2 - dimensions
+CLOCKWISE winding for polygons 
+"""
 
 
 def to_parametric(start, end):
+    """
+    parametric form of line_segment in D space
+
+    start: (..., D) tensor of start points
+    end: (..., D) tensor of end points
+
+    returns a tuple (m: (..., D) vector for direction, b (..., D) vector for point on line)
+    """
     m = end - start
     b = start
     return m, b
+
+
+def rotate_verts(verts):
+    """
+    polygons: (P, V, 2) tensor of P polygons with V verts in CLOCKWISE winding
+    returns a lise of vertices
+    """
+    range = torch.arange(1, verts.size(1) + 1)
+    range[-1] = 0
+    return verts.detach()[:, range]
+
+
+def edges(polygons):
+    """
+    polygons: (P, V, 2) tensor of P polygons with V verts in CLOCKWISE winding
+    returns tuple ( (P, V, 2) - start vertices, (P, V, 2) - end_vertices)
+    """
+    return polygons, rotate_verts(polygons)
+
+
+def normal(start, end):
+    """
+    Computes the normal to a line segment
+    start: (..., 2) set of start points in 2D
+    end: (..., 2) set of end points in 2D
+    returns: (..., 2) normals
+    """
+    m, b = to_parametric(start, end)
+    return torch.stack((-m[..., 1], m[..., 0]), dim=-1)
+
+
+def midpoint(start, end):
+    """
+    returns the co-ordinates of midpoint of a line segment
+    """
+    m, b = to_parametric(start, end)
+    return m * 0.5 + b
+
+
+def clip_line_segment_by_poly(start, end, clipping_poly):
+    """
+    start: (N, 2) tensor containing N start points
+    end: (N, 2) tensor containing N end points
+    clipping_polygons: (P, V, 2) tensor containing P polygons of V vertices with CLOCKWISE winding
+    returns:
+        (N, 2) tensor of clip enter points
+        (N, 2) tensor of clip exit points
+        (N) boolean tensor, True if line intersects polygon
+    """
+    with torch.no_grad():
+        # Cyrus Beck algorithm
+        # P0 - PEi
+        # P0: start point of the line segment
+        # P1: end point of the line segment
+        # PEi: the vertices of the polygon
+
+        start = start.unsqueeze(1).unsqueeze(1)
+        end = end.unsqueeze(1).unsqueeze(1)
+
+        start_minus_tri = start - clipping_poly
+        end_minus_start = end - start
+
+        # Ni -> compute outward facing Normals of the edges of the polygon
+        edge_normals = normal(*edges(clipping_poly))
+
+        # Ni dot (P0 - PEi)
+        start_minus_verts_dot = (edge_normals * start_minus_tri).sum(-1)  # dot product if orthonormal basis!
+
+        # Ni dot (P1 - P0)
+        end_minus_start_dot = - (edge_normals * end_minus_start).sum(-1)  # dot product
+        end_minus_start_dot[end_minus_start_dot == 0.] = -1.  # ignore zero denominator
+
+        # t_values = Ni dot (P0 - PEi) / - Ni dot (P1 - P0)
+        t_value = start_minus_verts_dot / end_minus_start_dot
+        t_positive = t_value.clone()
+        t_negative = t_value.clone()
+
+        # min value of greater is 0, max value of lesser is 1.
+        t_positive[~end_minus_start_dot.ge(0.)] = 0.
+        t_negative[~end_minus_start_dot.lt(0.)] = 1.
+
+        t_enter, _ = torch.max(t_positive, dim=2, keepdim=True)
+        t_exit, _ = torch.min(t_negative, dim=2, keepdim=True)
+
+        inside = ~t_enter.gt(t_exit)
+
+        m, b = to_parametric(start.squeeze(2), end.squeeze(2))
+        p_enter = m * t_enter + b
+        p_exit = m * t_exit + b
+
+        return p_enter, p_exit, inside.squeeze(-1)
+
+
+def is_inside(es, ee, p):
+    """
+    checks if a point is inside an edge of a polygon with CLOCKWISE winding
+    es: (..., 2) edge start co-ordinate
+    ee: (..., 2) edge end co-ordinate
+    p: (..., 2) point to test
+    """
+    R = (ee[..., 0] - es[..., 0]) * (p[..., 1] - es[..., 1]) - (ee[..., 1] - es[..., 1]) * (p[..., 0] - es[..., 0])
+    return R <= 0
 
 
 def compute_intersection(p1, p2, p3, p4):
@@ -66,134 +181,85 @@ def compute_intersection(p1, p2, p3, p4):
         # y-coordinate of intersection
         y = m1 * x + b1
 
-    intersection = (x, y)
+    # need to unsqueeze so torch.cat doesn't complain outside func
+    intersection = torch.stack((x, y)).unsqueeze(0)
 
     return intersection
 
-"""
-Given a subject polygon defined by the vertices in clockwise order
-subject_polygon = [(x_1,y_1),(x_2,y_2),...,(x_N,y_N)]
-and a clipping polygon, which will be used to clip the subject polygon,
-defined by the vertices in clockwise order
-clipping_polygon = [(x_1,y_1),(x_2,y_2),...,(x_K,y_K)]
-and assuming that the subject polygon and clipping polygon overlap,
-the Sutherland-Hodgman algorithm works as follows:
-for i = 1 to K:
 
-    # this will  store the vertices of the final clipped polygon
-    final_polygon = []
+def clip(subject_polygon, clipping_polygon):
+    # it is assumed that requires_grad = True only for clipping_polygon
+    # subject_polygon and clipping_polygon are P, V x 2 and M x 2 torch
+    # tensors respectively
 
-    # these two vertices define a line segment (edge) in the clipping
-    # polygon. It is assumed that indices wrap around, such that if
-    # i = 1, then i - 1 = K.
-    c_vertex1 = clipping_polygon[i]
-    c_vertex2 = clipping_polygon[i - 1]
+    final_polygon = torch.clone(subject_polygon)
 
-    for j = 1 to N:
+    for i in range(len(clipping_polygon)):
 
-        # these two vertices define a line segment (edge) in the subject
+        # stores the vertices of the next iteration of the clipping procedure
+        # final_polygon consists of list of 1 x 2 tensors
+        next_polygon = torch.clone(final_polygon)
+
+        # stores the vertices of the final clipped polygon. This will be
+        # a K x 2 tensor, so need to initialize shape to match this
+        final_polygon = torch.empty((0, 2))
+
+        # these two vertices define a line segment (edge) in the clipping
         # polygon. It is assumed that indices wrap around, such that if
-        # j = 1, then j - 1 = N.
-        s_vertex1 = subject_polygon[j]
-        s_vertex2 = subject_polygon[j - 1]
+        # i = 0, then i - 1 = M.
+        c_edge_start = clipping_polygon[i - 1]
+        c_edge_end = clipping_polygon[i]
 
-        # next, we want to check if the points s_vertex1 and s_vertex2 are
-        # inside the clipping polygon. Since the points that define the
-        # edges of the clipping polygon are listed in clockwise order in
-        # clipping_polygon, then we can do this by checking if s_vertex1
-        # and s_vertex2 are to the right of the line segment defined by
-        # the points (c_vertex1,c_vertex2).
-        #
-        # if both s_vertex1 and s_vertex2 are inside the clipping polygon,
-        # then s_vertex2 is added to the final_polygon list.
-        #
-        # if s_vertex1 is outside the clipping polygon and s_vertex2 is
-        # inside the clipping polygon, then we first add the point of
-        # intersection between the edge defined by (s_vertex1,s_vertex2)
-        # and the edge defined by (c_vertex1,c_vertex2) to final_polygon,
-        # and then we add s_vertex2 to final_polygon.
-        #
-        # if s_vertex1 is inside the clipping polygon and s_vertex2 is
-        # outside the clipping polygon, then we add the point of
-        # intersection between the edge defined by (s_vertex1,s_vertex2)
-        # and the edge defined by (c_vertex1,c_vertex2) to final_polygon.
-        #
-        # if both s_vertex1 and s_vertex2 are outside the clipping polygon,
-        # then neither are added to final_polygon.
-        #
-        # note that since we only compute the point of intersection if
-        # we know that the edge of the clipping polygon and the edge of
-        # the subject polygon intersect, then we can treat them as infinite
-        # lines and use the formula given here:
-        #
-        # https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection#Given_two_points_on_each_line
-        #
-        # to compute the point of intersection.
-"""
+        for j in range(len(next_polygon)):
 
+            # these two vertices define a line segment (edge) in the subject
+            # polygon
+            s_edge_start = next_polygon[j - 1]
+            s_edge_end = next_polygon[j]
 
-# POINTS NEED TO BE PRESENTED CLOCKWISE OR ELSE THIS WONT WORK
-
-
-class PolygonClipper:
-
-    def __init__(self, warn_if_empty=True):
-        self.warn_if_empty = warn_if_empty
-
-    def is_inside(self, p1, p2, q):
-        R = (p2[0] - p1[0]) * (q[1] - p1[1]) - (p2[1] - p1[1]) * (q[0] - p1[0])
-        if R <= 0:
-            return True
-        else:
-            return False
-
-    def clip(self, subject_polygon, clipping_polygon):
-        """
-        subject_polygon = [(x_1, y_1), (x_2, y_2), ..., (x_N, y_N)]
-        clipping_polygon = [(x_1,y_1),(x_2,y_2),...,(x_K,y_K)]
-        """
-        final_polygon = subject_polygon.copy()
-
-        for i in range(len(clipping_polygon)):
-
-            # stores the vertices of the next iteration of the clipping procedure
-            next_polygon = final_polygon.copy()
-
-            # stores the vertices of the final clipped polygon
-            final_polygon = []
-
-            # these two vertices define a line segment (edge) in the clipping
-            # polygon. It is assumed that indices wrap around, such that if
-            # i = 1, then i - 1 = K.
-            c_edge_start = clipping_polygon[i - 1]
-            c_edge_end = clipping_polygon[i]
-
-            for j in range(len(next_polygon)):
-
-                # these two vertices define a line segment (edge) in the subject
-                # polygon
-                s_edge_start = next_polygon[j - 1]
-                s_edge_end = next_polygon[j]
-
-                if self.is_inside(c_edge_start, c_edge_end, s_edge_end):
-                    if not self.is_inside(c_edge_start, c_edge_end, s_edge_start):
-                        intersection = compute_intersection(s_edge_start, s_edge_end, c_edge_start, c_edge_end)
-                        final_polygon.append(intersection)
-                    final_polygon.append(tuple(s_edge_end))
-                elif self.is_inside(c_edge_start, c_edge_end, s_edge_start):
+            if is_inside(c_edge_start, c_edge_end, s_edge_end):
+                if not is_inside(c_edge_start, c_edge_end, s_edge_start):
                     intersection = compute_intersection(s_edge_start, s_edge_end, c_edge_start, c_edge_end)
-                    final_polygon.append(intersection)
+                    final_polygon = torch.cat((final_polygon, intersection), dim=0)
+                final_polygon = torch.cat((final_polygon, s_edge_end.unsqueeze(0)), dim=0)
+            elif is_inside(c_edge_start, c_edge_end, s_edge_start):
+                intersection = compute_intersection(s_edge_start, s_edge_end, c_edge_start, c_edge_end)
+                final_polygon = torch.cat((final_polygon, intersection), dim=0)
 
-        return np.asarray(final_polygon)
+    return final_polygon
 
-    def __call__(self, A, B):
-        clipped_polygon = self.clip(A, B)
-        if len(clipped_polygon) == 0 and self.warn_if_empty:
-            warnings.warn("No intersections found. Are you sure your \
-                          polygon coordinates are in clockwise order?")
 
-        return clipped_polygon
+class Vector2:
+    def __init__(self, x=0., y=0.):
+        self.v = torch.tensor([[x, y]])
 
+    @property
+    def x(self):
+        return self.v[0, 0]
+
+    @property
+    def y(self):
+        return self.v[0, 1]
+
+    @property
+    def pygame(self):
+        return self.v[0].tolist()
+
+    def __add__(self, vec2):
+        result = Vector2()
+        result.v = self.v + vec2.v
+        return result
+
+    @property
+    def homo(self):
+        return torch.cat((self.v.T, torch.ones(1, 1)), dim=0)
+
+    def rotate(self, theta):
+        self.v = rotate2D(self.homo, theta)[0:2].T
+        return self
+
+
+# TODO fix area
 
 # (X[i], Y[i]) are coordinates of i'th point.
 def polygonArea(verts):
@@ -212,82 +278,41 @@ def polygonArea(verts):
 
 
 def rotate2D(verts, theta):
-    R = np.array([
-        [np.cos(theta), np.sin(theta), 0],
-        [-np.sin(theta), np.cos(theta), 0],
+    theta = theta if isinstance(theta, torch.Tensor) else torch.tensor(theta)
+    R = torch.tensor([
+        [+cos(theta), sin(theta), 0],
+        [-sin(theta), cos(theta), 0],
         [0., 0., 1.]
     ])
-    return np.matmul(R, verts)
+    return torch.matmul(R, verts)
 
 
 def translate2D(verts, vec2):
-    T = np.array([
+    T = torch.tensor([
         [1., 0, vec2.x],
         [0., 1., vec2.y],
         [0., 0., 1.]
     ])
-    return np.matmul(T, verts)
+    return torch.matmul(T, verts)
 
 
 def scale2D(verts, vec2):
-    S = np.array([
+    S = torch.tensor([
         [vec2.x, 0, 0.],
         [0., vec2.y, 0],
         [0., 0., 1.]
     ])
-    return np.matmul(S, verts)
+    return torch.matmul(S, verts)
 
 
 def to_pygame_poly(verts):
     return [v for v in zip(verts[0], verts[1])]
 
 
-def from_pygame_poly(pygame_verts):
-    """
-    converts pygame format [(x1, y1), (x2, y2)] to homogenous co-ords
-    """
-    v = np.array(pygame_verts).T
-    o = np.ones(len(pygame_verts)).reshape(1, len(pygame_verts))
-    return np.concatenate((v, o))
-
-
-def get_intersect(A, B, C, D):
-    '''
-    finding intersect point of line AB and CD
-    where A is the first point of line AB
-    and B is the second point of line AB
-    and C is the first point of line CD
-    and D is the second point of line CD
-    '''
-
-    # a1x + b1y = c1
-    a1 = B.y - A.y
-    b1 = A.x - B.x
-    c1 = a1 * (A.x) + b1 * (A.y)
-
-    # a2x + b2y = c2
-    a2 = D.y - C.y
-    b2 = C.x - D.x
-    c2 = a2 * (C.x) + b2 * (C.y)
-
-    # determinant
-    det = a1 * b2 - a2 * b1
-
-    # parallel line
-    if det == 0:
-        return (float('inf'), float('inf'))
-
-    # intersect point(x,y)
-    x = ((b2 * c1) - (b1 * c2)) / det
-    y = ((a1 * c2) - (a2 * c1)) / det
-    return (x, y)
-
-
 class Polygon:
-    def __init__(self, verts):
+    def __init__(self, verts, pos=None, scale=None, theta=None):
         """
         Use CLOCKWISE winding for vertices
-        vertices is numpy array in homogenous coordinates
 
         x4, y4 -----------  x1, y1
           -                   -
@@ -296,22 +321,317 @@ class Polygon:
           -                   -
         x3, y3 ------------ x2, y2
 
-        np.array([
+        square = Polygon([
           [x1, x2, x3, x4]
           [y1, y2, y3, y4]
-          [1., 1., 1., 1.]
         ])
 
         """
-        self.verts = verts
-        self.pos = Vector2(0., 0.)
-        self.theta = 0.
-        self.scale = Vector2(1., 1.)
+        self.verts = torch.tensor(verts).T
+        self.scale = Vector2(1., 1.) if scale is None else scale
+        self._theta = torch.tensor(0.) if theta is None else torch.tensor(theta)
+        self.pos = Vector2(0., 0.) if pos is None else pos
+
+    @property
+    def theta(self):
+        return self._theta
+
+    @theta.setter
+    def theta(self, theta):
+        self._theta = torch.tensor(theta)
+
+    @property
+    def verts_homo(self):
+        return torch.cat((self.verts, torch.ones(self.verts.shape[0], 1)), dim=-1).T
+
+    @property
+    def num_vertices(self):
+        return self.verts.shape[0]
 
     @property
     def world_verts(self):
-        return translate2D(rotate2D(scale2D(self.verts, self.scale), self.theta), self.pos)
+        M = translate2D(rotate2D(scale2D(torch.eye(3), self.scale), self._theta), self.pos)
+        return torch.matmul(M, self.verts_homo).T[:, 0:2]
 
     @property
     def pygame_world_verts(self):
-        return to_pygame_poly(self.world_verts)
+        return to_pygame_poly(self.world_verts.T)
+
+    @staticmethod
+    def stack(polys):
+        """
+        stack a list of P Polygons with V vertices into a P, V tensor
+        polys: [Polygon(), Polygon()] must have the same number of vertices
+        returns (P, V, 2) tensor of P polygons with V vertices
+        """
+        num_verts = [p.num_vertices for p in polys]
+        for i in range(len(num_verts)):
+            if num_verts[0] != num_verts[i]:
+                raise Exception(f'polygon with index {i} had {num_verts[i]} vertices'
+                                f' all polygons must have same number of vertices, eg: {num_verts[0]} vertices')
+        return torch.stack([p.world_verts for p in polys])
+
+
+def cross2D(v1, v2):
+    """
+    calculates the cross product in 2 dimensions
+    v1: [..., 2] tensor
+    v2: [..., 2] tensor
+    """
+    return v1[..., 0] * v2[..., 1] - v1[..., 1] * v2[..., 0]
+
+
+def compute_tu(t_m, t_b, u_m, u_b):
+    """
+    calculates the point of intersection between two lines in parametric form
+    t_m: (N, 2) m values: (unnormalized slope) for a set of N lines
+    t_b: (N, 2) b values: (point on the line) for N lines
+    u_m: (M, 2) m values: (unnormalized slope) for a set of N lines to intesect with t
+    u_b: (M, 2) b values: (poin on the line) for a set of N lines to intesect with t
+    returns t, u, t_m, t_b, U_m, u_b
+        (M, N, 1) t: parameter such that t_b + t_m * t = intersection point (point in terms of t)
+        (M, N, 1) u: parameter such that u_b + u_m * u = intersection point (point in terms of u)
+        (1, M, 2) t_m: tm such that t_m * t + t_b = point of intersection
+        (1, M, 2) t_b: see above
+        (M, 1, 2) u_m: tm such that u_m * u + u_b = point of intersection
+        (M, 1, 2) u_b: see above
+
+        Note: t and u have the property that 0. < t < 1., and 0 < u < 1. means the point lies inside the line segment
+        used to obtain the parametric form
+
+        ie: 0. =< t =< 1. and 0. =< u =< 1 means the point lies on the intersection of 2 line segments used to obtain
+        the parametric form
+
+        Note: if the lines and parallel, no point of intersection exists, so t and u will be set to inf
+    """
+    t_m, t_b = t_m.unsqueeze(0), t_b.unsqueeze(0)
+    u_m, u_b = u_m.unsqueeze(1), u_b.unsqueeze(1)
+    i = u_b - t_b
+    det_denominator = cross2D(t_m, u_m)
+    parallel = det_denominator == 0.  # take note of the parallel lines
+    det_denominator[parallel] = 1.  # put a placeholder value to prevent div/0
+    t = cross2D(i, u_m) / det_denominator
+    u = cross2D(i, t_m) / det_denominator
+
+    # if the lines were parallel, they converge at "infinity"
+    t[parallel] = torch.inf
+    u[parallel] = torch.inf
+    return t.unsqueeze(-1), u.unsqueeze(-1), t_m, t_b, u_m, u_b
+
+
+def line_seg_intersect(t_start, t_end, u_start, u_end):
+    """
+    Computes intersection between two sets of line segments
+    t_start: (N, 2) start points of segments
+    t_end: (N, 2) end points of set of line segments
+    u_start: (M, 2) start points of segment set to intersect
+    u_end: (M, 2) end points of segment set to intersections
+    returns: p, mask
+        p: (N, M, 2)
+        mask: (N, M)
+    """
+    t_m, t_b = to_parametric(t_start, t_end)
+    u_m, u_b = to_parametric(u_start, u_end)
+
+    t, u,  t_m, t_b, u_m, u_b = compute_tu(t_m, t_b, u_m, u_b)
+    intersect = t.ge(0.) & t.le(1.) & u.ge(0.) & u.le(1.)
+    p = t_m * t + t_b
+    return p, intersect.squeeze()
+
+
+if __name__ == '__main__':
+
+    from matplotlib import pyplot as plt
+    from matplotlib.patches import Polygon as PolygonPatch
+
+    # plotting
+    fig, axes = plt.subplots(2, 3)
+    axes = axes.flatten()
+
+    for ax in axes:
+        ax.set_aspect('equal', adjustable='box')
+
+
+    def plot_normals(ax, poly):
+        P, V, _ = poly.shape
+        start, end = edges(poly)
+        midpoints = midpoint(start, end)
+        normals = normal(start, end)
+        mid_normal_ends = normals * 0.3 + midpoints
+
+        for p in range(P):
+            for i in range(V):
+                line_segment = torch.stack((midpoints[p, i], mid_normal_ends[p, i]), dim=0)
+                ax.plot(line_segment[:, 0], line_segment[:, 1], color='green')
+
+
+    def plot_line_segments(ax, start, end, mask=None, color=None, **kwargs):
+        for i in range(len(start)):
+            if mask is None:
+                ax.plot([start[i, 0], end[i, 0]], [start[i, 1], end[i, 1]], color=color, **kwargs)
+            elif mask[i]:
+                ax.plot([start[i, 0], end[i, 0]], [start[i, 1], end[i, 1]], color=color, **kwargs)
+
+
+    """
+    top left subplot - lines clipping 2 triangles
+    """
+
+    # define triangle and line segs
+    start = torch.tensor([
+        [0, 0, 0, 0.0, 0.6, 0.75, 0., 0.],
+        [1, 1, 1, 0.5, 1.8, 1.25, 1., 1.6]
+    ]).T
+
+    end = torch.tensor([
+        [1, 1.0, 0., 1.0, 1., 0.6, 1.0, 2.],
+        [3, 1.5, 2., 1.1, 2., 1.5, 1.0, 1.6]
+    ]).T
+
+    triangles = []
+    triangles += [torch.tensor([
+        [0.5, 0.75, 0.5],
+        [2.5, 1.75, 1.]
+    ]).T]
+    triangles += [torch.tensor([
+        [1.5, 1.75, 1.5],
+        [2.5, 1.75, 1.]
+    ]).T]
+
+    triangles = torch.stack(triangles)
+
+    # plot triangle
+    for triangle in triangles:
+        axes[0].add_patch(PolygonPatch(triangle))
+
+    # plot_normals(axes[0], triangles)
+    plot_line_segments(axes[0], start, end, color='blue')
+    start, end, inside = clip_line_segment_by_poly(start, end, triangles)
+    plot_line_segments(axes[0], start.flatten(0, 1), end.flatten(0, 1), inside.flatten(0, 1), color='red')
+
+    """
+    top right diagram - lines clipping 2 quads
+    """
+
+    # define quad and line segs
+    start = torch.tensor([
+        [+4., +2.5, +1.5],
+        [-1., -2.5, -3.0]
+    ]).T
+
+    end = torch.tensor([
+        [+1., +3.5, +3.5],
+        [-3., -2.0, -3.0]
+    ]).T
+
+    quads = [torch.tensor([
+        [3., 3., 2., 2.],
+        [-1.5, -2.75, -2.75, -1.5]
+    ]).T]
+    quads += [torch.tensor([
+        [+4., +4, +3.5, +3],
+        [-1., -3, -3.0, -1]
+    ]).T]
+
+    quads = torch.stack(quads)
+
+    # plot quad
+    for quad in quads:
+        axes[1].add_patch(PolygonPatch(quad))
+    # plot_normals(axes[1], quad)
+    plot_line_segments(axes[1], start, end, color='blue')
+    start, end, inside = clip_line_segment_by_poly(start, end, quads)
+    plot_line_segments(axes[1], start.flatten(0, 1), end.flatten(0, 1), inside.flatten(0, 1), color='red')
+
+    """
+    bottom left, polygon clipping with a polygon
+    """
+
+    quads = [
+        Polygon([
+            [1., 1., -1., -1.],
+            [1, -1., -1., 1]
+        ], pos=Vector2(0, 2.5), scale=Vector2(2, 2), theta=torch.pi / 4),
+        Polygon([
+            [1, +1., -1., -1.],
+            [1, -1., -1., +1.]
+        ], pos=Vector2(1.5, 0), scale=Vector2(0.5, 0.5)),
+    ]
+
+    triangle = Polygon([
+        [0., 2, -2],
+        [2., 0, +0]
+    ], pos=Vector2(0, -1))
+
+    for quad in quads:
+        axes[2].add_patch(PolygonPatch(quad.world_verts, color='blue'))
+
+    axes[2].add_patch(PolygonPatch(triangle.verts, color='green'))
+
+    quad_tensor = Polygon.stack(quads)
+
+    for q in quad_tensor:
+        clipped_q = clip(q, triangle.verts)
+        axes[2].add_patch(PolygonPatch(clipped_q, color='red'))
+
+    axes[2].set_xlim(-5, 5)
+    axes[2].set_ylim(-5, 5)
+
+    """
+    intersection of 2 line segments
+    """
+
+    l1_start = torch.tensor([
+        [0., 0.], [0, 0], [0, 0]
+    ])
+    l1_end = torch.tensor([
+        [2., 2.], [1., 2.], [1, 0.5]
+    ])
+
+    l2_start = torch.tensor([[0., 3.], [0., 1.]])
+    l2_end = torch.tensor([[3., 0.], [1., 0.]])
+
+    plot_line_segments(axes[3], l1_start, l1_end)
+    plot_line_segments(axes[3], l2_start, l2_end)
+
+    p, mask = line_seg_intersect(l1_start, l1_end, l2_start, l2_end)
+
+    for p, mask in zip(p.flatten(0, 1), mask.flatten()):
+        if mask:
+            axes[3].scatter(p[0], p[1])
+
+    """
+    raycast
+    """
+
+    # ray in parametric form
+    ray_origin = torch.tensor([
+        [0., 0.], [3, 2], [2, 3]
+    ])
+    ray_vector = torch.tensor([
+        [1., 1.], [-1, -1], [-1, -1]
+    ])
+
+    ray_far_end = ray_origin + ray_vector * 4.0
+
+    l2_start = torch.tensor([
+        [0., 3.], [0, 2.],
+    ])
+    l2_end = torch.tensor([
+        [3., 0.], [2., 0]])
+
+    plot_line_segments(axes[4], l2_start, l2_end, )
+    plot_line_segments(axes[4], ray_origin, ray_far_end, linestyle='dotted')
+
+    def raycast(ray_origin, ray_vector, l_start, l_end):
+        t_m, t_b = to_parametric(l_start, l_end)
+        t, r,  t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
+        intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
+        r_length, r_index = torch.min(r, dim=1, keepdim=True)
+        return ray_origin, ray_origin + r_length * ray_vector, intersect
+
+    ray_origin, ray_end, mask = raycast(ray_origin, ray_vector, l2_start, l2_end)
+
+    plot_line_segments(axes[4], ray_origin.flatten(0, 1), ray_end.flatten(0, 1), mask.flatten())
+
+    plt.show()

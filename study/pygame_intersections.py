@@ -3,7 +3,7 @@ from pygame.locals import *
 import numpy as np
 from numpy import pi, sin, cos
 from pygame import Vector2
-from polygon import PolygonClipper, Polygon, polygonArea, from_pygame_poly
+from polygon_old import PolygonClipper, Polygon, polygonArea, from_pygame_poly
 
 
 # clockwise winding required for the clipping to work

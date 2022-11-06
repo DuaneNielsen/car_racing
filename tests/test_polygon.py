@@ -1,4 +1,4 @@
-import polygon
+import polygon_old
 import numpy as np
 
 
@@ -8,7 +8,7 @@ def test_area():
         [1., -1, -1, 1]
     ])
 
-    assert polygon.polygonArea(verts) == 4.0
+    assert polygon_old.polygonArea(verts) == 4.0
 
 
 def test_conversions():
@@ -18,6 +18,6 @@ def test_conversions():
         [1., 1., 1., 1]
     ])
 
-    pygame_verts = polygon.to_pygame_poly(verts)
-    final_verts = polygon.from_pygame_poly(pygame_verts)
+    pygame_verts = polygon_old.to_pygame_poly(verts)
+    final_verts = polygon_old.from_pygame_poly(pygame_verts)
     assert np.allclose(final_verts, verts)
