@@ -4,7 +4,7 @@ import math
 import numpy as np
 from gym.utils import seeding
 import torch
-from polygon import Polygon, Vector2, clip_line_segment_by_poly, rotate2D
+from polygon import Polygon, Vector2, clip_line_segment_by_poly, rotate2D, raycast, rotate_verts
 
 
 def create_track(seed):
@@ -238,10 +238,30 @@ def main():
     GRAY = (200, 200, 200)
     BLUE = (0, 0, 255)
     GREEN = (0, 255, 0)
+    YELLOW = (255, 255, 0)
     LIGHT_GREEN = (160, 255, 180)
     RED = (255, 0, 0)
 
     track, track_colors, road_left, road_right = create_track(1)
+
+    def scale_translate(geometry):
+        return 8 * geometry + np.array([[450., 100.]])
+
+    world_track = scale_translate(track)
+
+    road_left, road_right = torch.from_numpy(road_left), torch.from_numpy(road_right)
+
+    def roll(t):
+        prev = torch.arange(1, t.size(0) + 1)
+        prev[-1] = 0
+        return t[prev]
+
+    road_left_end, road_right_end = roll(road_left), roll(road_right)
+    road_start = torch.cat((road_left, road_right))
+    road_end = torch.cat((road_left_end, road_right_end))
+
+    road_start = scale_translate(road_start)
+    road_end = scale_translate(road_end)
 
     car = Polygon([
         [4., 4., -4., -4.],
@@ -252,7 +272,6 @@ def main():
     while True:
         clock.tick(100)
         DISPLAY.fill(LIGHT_GREEN)
-        world_track = 8 * track + np.array([[450., 100.]])
 
         for poly, color in zip(world_track, track_colors):
             pygame.draw.polygon(DISPLAY, color, poly)
@@ -260,40 +279,14 @@ def main():
         car.theta = theta
         pygame.draw.polygon(DISPLAY, RED, car.pygame_world_verts)
 
-        start, end = car.pos + Vector2(0, 0.), car.pos + Vector2(0., 200.).rotate(car.theta)
-        pygame.draw.line(DISPLAY, BLUE, start.pygame, end.pygame, width=2)
+        for o, e in zip(road_start, road_end):
+            pygame.draw.line(DISPLAY, WHITE, o.tolist(), e.tolist(), width=4)
 
-        # segment the scan line
-        start_seg, end_seg, mask = clip_line_segment_by_poly(start.v, end.v, torch.from_numpy(world_track))
-
-        def contiguous_len(start_seg, end_seg, mask):
-            v_from = end_seg - start_seg
-
-
-            """
-            start_seg (N, P, 2)
-            end_seg (N, P, 2)
-            mask (N, P, 1)
-            """
-            N, P, _ = start_seg.shape
-            contig_lines = []
-            for p in range(P):
-                line_seg = []
-                for n in range(N):
-                    if not mask[n, p]:
-                        break
-                    line_seg += [start_seg[n, p], end_seg[n, p]]
-                contig_lines += [line_seg]
-            return contig_lines
-
-        contig_lines = contiguous_len(start_seg, end_seg, mask)
-
-        # start_seg, end_seg, mask = start_seg.flatten(0, 1), end_seg.flatten(0, 1), mask.flatten(0, 1)
-
-        # draw the segments that intersect in a RED color
-        for i in range(start_seg.size(0)):
-            if mask[i]:
-                pygame.draw.line(DISPLAY, RED, start_seg[i].tolist(), end_seg[i].tolist(), width=2)
+        origin, vector = car.pos + Vector2(0, 0.), Vector2(0., 200.).rotate(car.theta)
+        ray_origin, ray_end, mask = raycast(origin.v, vector.v, road_start, road_end)
+        for o, e, m in zip(ray_origin, ray_end, mask):
+            if m:
+                pygame.draw.line(DISPLAY, YELLOW, o[0].tolist(), e[0].tolist(), width=2)
 
         theta += 0.002
         theta = theta % (np.pi * 2)

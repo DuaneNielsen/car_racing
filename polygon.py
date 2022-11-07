@@ -439,6 +439,27 @@ def line_seg_intersect(t_start, t_end, u_start, u_end):
     return p, intersect.squeeze()
 
 
+def raycast(ray_origin, ray_vector, l_start, l_end):
+    """
+    casts a ray against a set of line segments
+    ray_origin: (N, 2) ray origins
+    ray_vector: (N, 2) ray vectors
+    l_start: (M, 2) line segment starts to cast onto
+    l_end: (M, 2) line segment ends to cast onto
+    returns:
+        ray_origin: (N, 2)
+        ray_end: (N, 2)
+        mask: N - True if the ray hit a line segment, False if it didn't
+    """
+    t_m, t_b = to_parametric(l_start, l_end)
+    t, r,  t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
+    intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
+    r[~intersect] = torch.inf
+    r_length, r_index = torch.min(r, dim=1, keepdim=True)
+    intersect = intersect[:, r_index]
+    return ray_origin, ray_origin + r_length * ray_vector, intersect
+
+
 if __name__ == '__main__':
 
     from matplotlib import pyplot as plt
@@ -622,13 +643,6 @@ if __name__ == '__main__':
 
     plot_line_segments(axes[4], l2_start, l2_end, )
     plot_line_segments(axes[4], ray_origin, ray_far_end, linestyle='dotted')
-
-    def raycast(ray_origin, ray_vector, l_start, l_end):
-        t_m, t_b = to_parametric(l_start, l_end)
-        t, r,  t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
-        intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
-        r_length, r_index = torch.min(r, dim=1, keepdim=True)
-        return ray_origin, ray_origin + r_length * ray_vector, intersect
 
     ray_origin, ray_end, mask = raycast(ray_origin, ray_vector, l2_start, l2_end)
 
