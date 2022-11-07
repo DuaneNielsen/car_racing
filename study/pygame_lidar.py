@@ -4,8 +4,9 @@ import math
 import numpy as np
 from gym.utils import seeding
 import torch
-from polygon import Polygon, Vector2, clip_line_segment_by_poly, rotate2D, raycast, rotate_verts
+from polygon import Polygon, Vector2, raycast, line_seg_intersect, edges, clip_line_segment_by_poly
 from math import radians
+
 
 def create_track(seed):
     np_random, seed = seeding.np_random(seed)
@@ -241,13 +242,15 @@ def main():
     YELLOW = (255, 255, 0)
     LIGHT_GREEN = (160, 255, 180)
     RED = (255, 0, 0)
+    LIGHT_RED = (255, 160, 160)
 
-    track, track_colors, road_left, road_right = create_track(1)
+    track, track_colors, road_left, road_right = create_track(seed=1)
 
     def scale_translate(geometry):
         return 8 * geometry + np.array([[450., 100.]])
 
     world_track = scale_translate(track)
+    world_track = torch.from_numpy(world_track)
 
     road_left, road_right = torch.from_numpy(road_left), torch.from_numpy(road_right)
 
@@ -263,35 +266,75 @@ def main():
     road_start = scale_translate(road_start)
     road_end = scale_translate(road_end)
 
+    CAR_WIDTH, CAR_LENGTH = 8., 14.
+    N_BEAMS = 13
     car = Polygon([
-        [4., 4., -4., -4.],
-        [7, -7., -7., 7]
+        [CAR_WIDTH/2, CAR_WIDTH/2, -CAR_WIDTH/2, -CAR_WIDTH/2],
+        [CAR_LENGTH/2, -CAR_LENGTH/2, -CAR_LENGTH/2, CAR_LENGTH/2]
     ], pos=Vector2(550, 540), scale=Vector2(1.5, 1.5))
-    num_beams = 13
+
     lidar_angles = torch.tensor(
-        [radians(180. + theta) for theta in torch.linspace(45., -45, num_beams)]
+        [radians(theta) for theta in torch.linspace(-45., 45, N_BEAMS)]
     )
+
+    def car_path(car, car_path_vec):
+        car_path_poly = Polygon([
+            [car.verts[0, 0] + car_path_vec.x, car.verts[0, 0], car.verts[3, 0], car.verts[3, 0] + car_path_vec.x],
+            [car.verts[0, 1] + car_path_vec.y, car.verts[0, 1], car.verts[3, 1], car.verts[3, 1] + car_path_vec.y]
+        ])
+        car_path_poly.pos = car.pos
+        car_path_poly.theta = car.theta
+        return car_path_poly
 
     theta = 0
     while True:
+
+        car.theta = theta
+
+        # lidar beams
+        beam_origin = torch.stack([car.pos.v[0] for _ in range(N_BEAMS)])
+        beam_vector = torch.stack([Vector2(0., 1.).rotate(car.theta).rotate(l_angle).v[0] for l_angle in lidar_angles])
+        ray_origin, ray_end, ray_len = raycast(beam_origin, beam_vector, road_start, road_end, max_len=200.)
+
+        # car_path
+        path = car_path(car, Vector2(0., abs(math.sin(theta)) * 200.))
+        path_edge_start, path_edge_end = edges(path.world_verts.unsqueeze(0))
+        path_edge_start, path_edge_end = path_edge_start.squeeze(0), path_edge_end.squeeze(0)
+        p, path_intersect_roadside = line_seg_intersect(path_edge_start, path_edge_end, road_start, road_end)
+
+        # detect road polygons in path
+        select_l_r_edges = torch.tensor([0, 2])
+        path_lr_start, path_lr_end = path_edge_start[select_l_r_edges], path_edge_end[select_l_r_edges]
+        start_path_clip, end_path_clip, road_intersect_path = clip_line_segment_by_poly(path_lr_start, path_lr_end, world_track)
+
         clock.tick(100)
         DISPLAY.fill(LIGHT_GREEN)
 
+        # draw track
         for poly, color in zip(world_track, track_colors):
-            pygame.draw.polygon(DISPLAY, color, poly)
-
-        car.theta = theta
-        pygame.draw.polygon(DISPLAY, RED, car.pygame_world_verts)
+            pygame.draw.polygon(DISPLAY, color, poly.tolist())
 
         for o, e in zip(road_start, road_end):
             pygame.draw.line(DISPLAY, WHITE, o.tolist(), e.tolist(), width=4)
 
-        beam_origin = torch.stack([car.pos.v[0] for _ in range(num_beams)])
-        beam_vector = torch.stack([Vector2(0., 200.).rotate(car.theta).rotate(l_angle).v[0] for l_angle in lidar_angles])
-        ray_origin, ray_end, ray_len = raycast(beam_origin, beam_vector, road_start, road_end, max_len=200.)
+        # draw road highlights
+        for road_intersect_path, poly in zip(road_intersect_path.permute(1, 0), world_track):
+            if road_intersect_path.any():
+                pygame.draw.polygon(DISPLAY, GREEN, poly.tolist())
+
+        # draw beams
         print(ray_len)
         for o, e in zip(ray_origin, ray_end):
             pygame.draw.line(DISPLAY, YELLOW, o.tolist(), e.tolist(), width=2)
+
+        # draw car
+        pygame.draw.polygon(DISPLAY, RED, car.pygame_world_verts)
+
+        # draw car path
+        path_color = LIGHT_RED if path_intersect_roadside.any() else GREEN
+        pygame.draw.polygon(DISPLAY, path_color, path.pygame_world_verts)
+        for s, e in zip(path_lr_start, path_lr_end):
+            pygame.draw.line(DISPLAY, WHITE, s.tolist(), e.tolist())
 
         theta += 0.002
         theta = theta % (np.pi * 2)
@@ -304,4 +347,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    with torch.no_grad():
+        main()

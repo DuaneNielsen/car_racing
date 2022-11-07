@@ -187,7 +187,7 @@ def compute_intersection(p1, p2, p3, p4):
     return intersection
 
 
-def clip(subject_polygon, clipping_polygon):
+def polygon_clip(subject_polygon, clipping_polygon):
     # it is assumed that requires_grad = True only for clipping_polygon
     # subject_polygon and clipping_polygon are P, V x 2 and M x 2 torch
     # tensors respectively
@@ -599,7 +599,7 @@ if __name__ == '__main__':
     quad_tensor = Polygon.stack(quads)
 
     for q in quad_tensor:
-        clipped_q = clip(q, triangle.verts)
+        clipped_q = polygon_clip(q, triangle.verts)
         axes[2].add_patch(PolygonPatch(clipped_q, color='red'))
 
     axes[2].set_xlim(-5, 5)
