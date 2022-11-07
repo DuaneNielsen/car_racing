@@ -2,6 +2,7 @@ import pygame, sys
 from pygame.locals import *
 import math
 import numpy as np
+import gym
 from gym.utils import seeding
 import torch
 from polygon import Polygon, Vector2, raycast, line_seg_intersect, edges, clip_line_segment_by_poly
@@ -228,7 +229,7 @@ def create_track(seed):
 
     return np.array(road_poly), road_colors, np.array(road_left), np.array(road_right)
 
-
+# class CarRacingPathEnv(gym.Env):
 def main():
     # init pygame DISPLAY and VARS
     pygame.init()
@@ -298,8 +299,7 @@ def main():
 
         # car_path
         path = car_path(car, Vector2(0., abs(math.sin(theta)) * 200.))
-        path_edge_start, path_edge_end = edges(path.world_verts.unsqueeze(0))
-        path_edge_start, path_edge_end = path_edge_start.squeeze(0), path_edge_end.squeeze(0)
+        path_edge_start, path_edge_end = edges(path.world_verts)
         p, path_intersect_roadside = line_seg_intersect(path_edge_start, path_edge_end, road_start, road_end)
 
         # detect road polygons in path

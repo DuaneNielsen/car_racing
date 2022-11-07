@@ -22,22 +22,26 @@ def to_parametric(start, end):
     return m, b
 
 
-def rotate_verts(verts):
+def roll(t, dim=0):
     """
-    polygons: (P, V, 2) tensor of P polygons with V verts in CLOCKWISE winding
-    returns a lise of vertices
+    moves values in tensor one index to the right
+    t: the tensor to roll
+    dim: the dim to roll on
     """
-    range = torch.arange(1, verts.size(1) + 1)
-    range[-1] = 0
-    return verts.detach()[:, range]
+    prev = torch.arange(1, t.size(dim) + 1)
+    prev[-1] = 0
+    return t.index_select(dim, prev)
 
 
 def edges(polygons):
     """
-    polygons: (P, V, 2) tensor of P polygons with V verts in CLOCKWISE winding
-    returns tuple ( (P, V, 2) - start vertices, (P, V, 2) - end_vertices)
+    polygons: (P, V, 2) or (V, 2) tensor of P polygons with V verts in CLOCKWISE winding
+    returns tuple ( (P, V, 2) or (V,2) - start vertices, (P, V, 2) or (V, 2) - end_vertices)
     """
-    return polygons, rotate_verts(polygons)
+    if len(polygons.shape) == 2:
+        return polygons, roll(polygons, dim=0)
+    else:
+        return polygons, roll(polygons, dim=1)
 
 
 def normal(start, end):
