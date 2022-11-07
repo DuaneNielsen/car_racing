@@ -439,7 +439,7 @@ def line_seg_intersect(t_start, t_end, u_start, u_end):
     return p, intersect.squeeze()
 
 
-def raycast(ray_origin, ray_vector, l_start, l_end):
+def raycast(ray_origin, ray_vector, l_start, l_end, max_len=None):
     """
     casts a ray against a set of line segments
     ray_origin: (N, 2) ray origins
@@ -452,12 +452,19 @@ def raycast(ray_origin, ray_vector, l_start, l_end):
         mask: N - True if the ray hit a line segment, False if it didn't
     """
     t_m, t_b = to_parametric(l_start, l_end)
+    ray_vector = ray_vector/torch.linalg.vector_norm(ray_vector, dim=-1, keepdim=True)
     t, r,  t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
-    intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
-    r[~intersect] = torch.inf
+
+    if max_len is None:
+        intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
+        r[~intersect] = torch.inf
+    else:
+        intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.) & r.lt(max_len)
+        r[~intersect] = max_len
+
     r_length, r_index = torch.min(r, dim=1, keepdim=True)
-    intersect = intersect[:, r_index]
-    return ray_origin, ray_origin + r_length * ray_vector, intersect
+    ray_end = ray_origin + r_length * ray_vector
+    return ray_origin.squeeze(1), ray_end.squeeze(1), r_length.squeeze()
 
 
 if __name__ == '__main__':
@@ -644,8 +651,8 @@ if __name__ == '__main__':
     plot_line_segments(axes[4], l2_start, l2_end, )
     plot_line_segments(axes[4], ray_origin, ray_far_end, linestyle='dotted')
 
-    ray_origin, ray_end, mask = raycast(ray_origin, ray_vector, l2_start, l2_end)
+    ray_origin, ray_end, ray_len = raycast(ray_origin, ray_vector, l2_start, l2_end)
 
-    plot_line_segments(axes[4], ray_origin.flatten(0, 1), ray_end.flatten(0, 1), mask.flatten())
+    plot_line_segments(axes[4], ray_origin, ray_end)
 
     plt.show()

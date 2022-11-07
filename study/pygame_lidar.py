@@ -5,7 +5,7 @@ import numpy as np
 from gym.utils import seeding
 import torch
 from polygon import Polygon, Vector2, clip_line_segment_by_poly, rotate2D, raycast, rotate_verts
-
+from math import radians
 
 def create_track(seed):
     np_random, seed = seeding.np_random(seed)
@@ -267,6 +267,10 @@ def main():
         [4., 4., -4., -4.],
         [7, -7., -7., 7]
     ], pos=Vector2(550, 540), scale=Vector2(1.5, 1.5))
+    num_beams = 13
+    lidar_angles = torch.tensor(
+        [radians(180. + theta) for theta in torch.linspace(45., -45, num_beams)]
+    )
 
     theta = 0
     while True:
@@ -282,11 +286,12 @@ def main():
         for o, e in zip(road_start, road_end):
             pygame.draw.line(DISPLAY, WHITE, o.tolist(), e.tolist(), width=4)
 
-        origin, vector = car.pos + Vector2(0, 0.), Vector2(0., 200.).rotate(car.theta)
-        ray_origin, ray_end, mask = raycast(origin.v, vector.v, road_start, road_end)
-        for o, e, m in zip(ray_origin, ray_end, mask):
-            if m:
-                pygame.draw.line(DISPLAY, YELLOW, o[0].tolist(), e[0].tolist(), width=2)
+        beam_origin = torch.stack([car.pos.v[0] for _ in range(num_beams)])
+        beam_vector = torch.stack([Vector2(0., 200.).rotate(car.theta).rotate(l_angle).v[0] for l_angle in lidar_angles])
+        ray_origin, ray_end, ray_len = raycast(beam_origin, beam_vector, road_start, road_end, max_len=200.)
+        print(ray_len)
+        for o, e in zip(ray_origin, ray_end):
+            pygame.draw.line(DISPLAY, YELLOW, o.tolist(), e.tolist(), width=2)
 
         theta += 0.002
         theta = theta % (np.pi * 2)
@@ -298,4 +303,5 @@ def main():
         pygame.display.flip()
 
 
-main()
+if __name__ == '__main__':
+    main()
