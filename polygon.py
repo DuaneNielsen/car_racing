@@ -251,7 +251,19 @@ class Vector2:
 
     def __add__(self, vec2):
         result = Vector2()
-        result.v = self.v + vec2.v
+        result.v = self.v.clone() + vec2.v
+        return result
+
+    def __mul__(self, scalar):
+        result = Vector2()
+        result.v = self.v.clone()
+        result.v = result.v * scalar
+        return result
+
+    def __rmul__(self, scalar):
+        result = Vector2()
+        result.v = self.v.clone()
+        result.v = result.v * scalar
         return result
 
     @property
@@ -351,6 +363,9 @@ class Polygon:
     @property
     def num_vertices(self):
         return self.verts.shape[0]
+
+    def world_transform(self):
+        return translate2D(rotate2D(scale2D(torch.eye(3), self.scale), self._theta), self.pos)
 
     @property
     def world_verts(self):
