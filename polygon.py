@@ -321,8 +321,162 @@ def scale2D(verts, vec2):
     return torch.matmul(S, verts)
 
 
+def scale_matrix(scale):
+    scale_x, scale_y = scale[:, 0], scale[:, 1]
+    zeros = torch.zeros_like(scale_x)
+    ones = torch.ones_like(scale_x)
+    return torch.stack([
+        torch.stack([scale_x, zeros, zeros], dim=-1),
+        torch.stack([zeros, scale_y, zeros], dim=-1),
+        torch.stack([zeros, zeros, ones], dim=-1)
+    ], dim=1)
+
+
+def adjoint_matrix(se2):
+    """
+    Builds an adjoint matrix
+    """
+    N = se2.shape[0]
+    cos_theta = cos(se2[:, 2])
+    sin_theta = sin(se2[:, 2])
+    x, y = se2[:, 0], se2[:, 1]
+
+    return torch.stack((
+        torch.stack([+cos_theta, sin_theta, x], dim=-1),
+        torch.stack([-sin_theta, cos_theta, y], dim=-1),
+        torch.tensor([0., 0., 1.]).repeat(N).reshape(N, 3)
+    ), dim=1)
+
+
+def apply_transform(transf, verts):
+    """
+    transf: a (N, 3, 3) homogenous transformation matrix
+    verts: (P, V, 2) or (V, 2) list of polygon verts
+    returns: (N, V, 2) verts rescaled and transformed
+    P and N will need to match, or else specify a single V
+    """
+    N, _, _ = transf.shape
+    if len(verts.shape) == 2:
+        verts = verts.unsqueeze(0)
+    else:
+        assert (N == verts.shape[0]) or (verts.shape[0] == 1) or (N == 1), \
+            f"first dimension of verts must match first dimension of transforms (or be equal to 1)"
+    P, V, _ = verts.shape
+    verts = torch.cat((verts, torch.ones(P, V, 1)), dim=-1)
+    verts = torch.matmul(transf, verts.permute(0, 2, 1)).permute(0, 2, 1)
+    return verts[..., 0:2]
+
+
+def transform_matrix(se2, scale=None):
+    """
+    se2: (N, 3) vector in SE2, [x, y, theta]
+    scale (optional): (N, 2) scaling vector in [x, y]
+    returns: (N, 3, 3) transformation matrix
+    """
+    transform_matrix = adjoint_matrix(se2)
+
+    if scale is not None:
+        transform_matrix = torch.matmul(transform_matrix, scale_matrix(scale))
+
+    return transform_matrix
+
+
 def to_pygame_poly(verts):
     return [v for v in zip(verts[0], verts[1])]
+
+
+class Model:
+    def __init__(self, verts, N=None):
+        """
+        Stores a set of model vertices and positions
+        verts: polygons are written as 2 lists of co-ordinates [[x1, x2, x3], [y1, y2, y3]]
+        you can specify just a single polygon, or a list of polygons
+        N: required if you specify a single polygon
+
+        Use CLOCKWISE winding for vertices
+
+        x4, y4 -----------  x1, y1
+          -                   -
+          -                   -
+          -                   -
+          -                   -
+        x3, y3 ------------ x2, y2
+
+        square = Model([
+          [x1, x2, x3, x4]
+          [y1, y2, y3, y4]
+        ])
+
+        """
+        self.verts = torch.tensor(verts)
+        if len(self.verts.shape) == 2:
+            self.verts = self.verts.T.unsqueeze(0)
+            assert N is not None, f"set N to a value if using a single set of verts"
+        else:
+            self.verts = self.verts.permute(0, 2, 1)
+            N = len(verts)
+        self.se2 = torch.zeros(N, 3)
+        self.scale = torch.ones(N, 2)
+        self.parent = None
+        self.children = []
+
+    @property
+    def N(self):
+        """
+        returns the number of model instances
+        """
+        return self.se2.shape[0]
+
+    @property
+    def __len__(self):
+        return self.N
+
+    @property
+    def pos(self):
+        """
+        returns N, 2 model positions
+        """
+        return self.se2[:, 0:2]
+
+    @pos.setter
+    def pos(self, pos):
+        """
+        pos: (N, 2)
+        """
+        self.se2[:, 0:2] = pos
+
+    @property
+    def theta(self):
+        """
+        returns theta angle in radians
+        """
+        return self.se2[:, 2]
+
+    @theta.setter
+    def theta(self, theta):
+        """
+        theta: (N) in radians
+        """
+        self.se2[:, 2] = theta
+
+    def parents(self):
+        parents = []
+        parent = self.parent
+        while parent is not None:
+            parents += [parent]
+            parent = parent.parent
+        return parents
+
+    def world_verts(self):
+        t_matrix = transform_matrix(self.se2, self.scale)
+        for parent in self.parents():
+            parent_t_matrix = transform_matrix(parent.se2, parent.scale)
+            t_matrix = torch.matmul(parent_t_matrix, t_matrix)
+        return apply_transform(t_matrix, self.verts)
+
+    def attach(self, model):
+        model.parent = self
+        self.children.append(model)
 
 
 class Polygon:
@@ -347,6 +501,7 @@ class Polygon:
         self.scale = Vector2(1., 1.) if scale is None else scale
         self._theta = torch.tensor(0.) if theta is None else torch.tensor(theta)
         self.pos = Vector2(0., 0.) if pos is None else pos
+        self.se2 = torch.zeros(3)
 
     @property
     def theta(self):
@@ -446,13 +601,13 @@ def line_seg_intersect(t_start, t_end, u_start, u_end):
     u_start: (M, 2) start points of segment set to intersect
     u_end: (M, 2) end points of segment set to intersections
     returns: p, mask
-        p: (N, M, 2)
-        mask: (N, M)
+        p: (M, N, 2)
+        mask: (M, N)
     """
     t_m, t_b = to_parametric(t_start, t_end)
     u_m, u_b = to_parametric(u_start, u_end)
 
-    t, u,  t_m, t_b, u_m, u_b = compute_tu(t_m, t_b, u_m, u_b)
+    t, u, t_m, t_b, u_m, u_b = compute_tu(t_m, t_b, u_m, u_b)
     intersect = t.ge(0.) & t.le(1.) & u.ge(0.) & u.le(1.)
     p = t_m * t + t_b
     return p, intersect.squeeze()
@@ -471,8 +626,8 @@ def raycast(ray_origin, ray_vector, l_start, l_end, max_len=None):
         mask: N - True if the ray hit a line segment, False if it didn't
     """
     t_m, t_b = to_parametric(l_start, l_end)
-    ray_vector = ray_vector/torch.linalg.vector_norm(ray_vector, dim=-1, keepdim=True)
-    t, r,  t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
+    ray_vector = ray_vector / torch.linalg.vector_norm(ray_vector, dim=-1, keepdim=True)
+    t, r, t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
 
     if max_len is None:
         intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
@@ -490,9 +645,10 @@ if __name__ == '__main__':
 
     from matplotlib import pyplot as plt
     from matplotlib.patches import Polygon as PolygonPatch
+    from math import radians
 
     # plotting
-    fig, axes = plt.subplots(2, 3)
+    fig, axes = plt.subplots(2, 4)
     axes = axes.flatten()
 
     for ax in axes:
@@ -523,6 +679,7 @@ if __name__ == '__main__':
     """
     top left subplot - lines clipping 2 triangles
     """
+    axes[0].set_title('polygon clipping with lines')
 
     # define triangle and line segs
     start = torch.tensor([
@@ -559,6 +716,7 @@ if __name__ == '__main__':
     """
     top right diagram - lines clipping 2 quads
     """
+    axes[1].set_title('polygon clipping with lines')
 
     # define quad and line segs
     start = torch.tensor([
@@ -593,6 +751,7 @@ if __name__ == '__main__':
     """
     bottom left, polygon clipping with a polygon
     """
+    axes[2].set_title('polygon clipping with a polygon')
 
     quads = [
         Polygon([
@@ -627,6 +786,7 @@ if __name__ == '__main__':
     """
     intersection of 2 line segments
     """
+    axes[3].set_title('line group intersections')
 
     l1_start = torch.tensor([
         [0., 0.], [0, 0], [0, 0]
@@ -650,6 +810,7 @@ if __name__ == '__main__':
     """
     raycast
     """
+    axes[4].set_title('raycasting')
 
     # ray in parametric form
     ray_origin = torch.tensor([
@@ -673,5 +834,66 @@ if __name__ == '__main__':
     ray_origin, ray_end, ray_len = raycast(ray_origin, ray_vector, l2_start, l2_end)
 
     plot_line_segments(axes[4], ray_origin, ray_end)
+
+    """
+    se2 transforms
+    """
+    axes[5].set_title('SE2 style transforms')
+
+    quads = Model([
+        [1., 1., -1., -1.],
+        [1, -1., -1., 1]
+    ], N=4)
+
+    quads.pos = torch.tensor([[0, 0], [3, 3], [-3, -3], [-5, -5]])
+
+    for p in quads.world_verts():
+        axes[5].add_patch(PolygonPatch(p, color='red'))
+
+    tri = torch.tensor([
+        [0., 1., -1.],
+        [1, 0., 0.]
+    ]).T
+
+    tri = torch.stack([tri, tri, tri])
+    se2 = torch.tensor([[5, 5, radians(34)], [3, -3, radians(60.)], [-5, 5, radians(90.)]])
+    scale = torch.ones(3, 2) * 3.
+
+    project = apply_transform(transform_matrix(se2, scale), tri)
+    for p in project:
+        axes[5].add_patch(PolygonPatch(p, color='red'))
+    axes[5].set_xlim(-8, 8)
+    axes[5].set_ylim(-8, 8)
+
+    """
+    model heirarchy
+    """
+
+    axes[6].set_title('model heirarchy')
+    axes[6].set_xlim(-5, 5)
+    axes[6].set_ylim(-5, 5)
+
+    tanks = Model([
+        [1., 1., -1., -1.],
+        [1, -1., -1., 1]
+    ], N=4)
+
+    turrets = Model([
+        [0., 1., -1.],
+        [1, 0., 0.]
+    ], N=4)
+
+    tanks.attach(turrets)
+    tanks.pos = torch.tensor([[3., 3], [3, -3], [-3, -3], [-3, 3]])
+    tanks.theta = torch.tensor([radians(-45), radians(0), radians(45.), radians(90.)])
+    turrets.theta = torch.tensor([radians(0), radians(90.), radians(180.), radians(270)])
+
+    for tank in tanks.world_verts():
+        tank_patch = PolygonPatch(tank, color='blue')
+        axes[6].add_patch(tank_patch)
+
+    for turret in turrets.world_verts():
+        turrent_patch = PolygonPatch(turret, color='green')
+        axes[6].add_patch(turrent_patch)
 
     plt.show()
