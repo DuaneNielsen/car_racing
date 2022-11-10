@@ -258,16 +258,22 @@ class PygameCamera(Camera):
         super().__init__(se2, scale)
         self.DISPLAY = pygame.display.set_mode(resolution, 0, 32)
 
+    def pick_color(self, i, color):
+        if isinstance(color, torch.Tensor):
+            return color[i].tolist()
+        else:
+            return color
+
     def draw_polygon(self, model, color):
         car_verts = self.transform(model)
         for i in range(len(model)):
-            pygame.draw.polygon(self.DISPLAY, color, car_verts[i].tolist())
+            pygame.draw.polygon(self.DISPLAY, self.pick_color(i, color), car_verts[i].tolist())
 
     def draw_line(self, origin, end, color, width=1):
         origin, end = origin.flatten(0, -2), end.flatten(0, -2)
         origin, end = self.transform(origin).squeeze(0), self.transform(end).squeeze(0)
-        for o, e in zip(origin, end):
-            pygame.draw.line(self.DISPLAY, color, o.tolist(), e.tolist(), width=width)
+        for i, (o, e) in enumerate(zip(origin, end)):
+            pygame.draw.line(self.DISPLAY, self.pick_color(i, color), o.tolist(), e.tolist(), width=width)
 
 
 params = {
@@ -385,38 +391,49 @@ class CarRacingPathEnv(gym.Env):
         target_distance = params['MAX_TARGET_DISTANCE'] * action[:, 1]
         self.car_path.se2[:, 2] = steer_angle
         self.car_path.scale[:, 1] = target_distance
-        self.car_path.pos[:, 1] = params['CAR_LENGTH'] /2.
+        self.car_path.pos[:, 1] = params['CAR_LENGTH'] / 2.
 
         # check car_path
         path_edge_start, path_edge_end = edges(self.car_path.world_verts())
-        path_edge_start, path_edge_end = path_edge_start.flatten(end_dim=-2), path_edge_end.flatten(end_dim=-2)
-        p, path_intersect_roadside = line_seg_intersect(path_edge_start, path_edge_end, self.road_start, self.road_end)
+        path_edge_start_flat, path_edge_end_flat = path_edge_start.flatten(end_dim=-2), path_edge_end.flatten(end_dim=-2)
+        p, path_intersect_roadside = line_seg_intersect(path_edge_start_flat, path_edge_end_flat, self.road_start, self.road_end)
         path_intersect_roadside = path_intersect_roadside.unflatten(1, (self.n_cars, 4))
         # if any of the boundaries of the box intersect the edge, the cars path is not clear
         self.path_off_road = path_intersect_roadside.permute(1, 0, 2).any(1).any(1)
 
         # detect road polygons in path
-        # select_l_r_edges = torch.tensor([0, 2])
-        # path_lr_start, path_lr_end = path_edge_start[select_l_r_edges], path_edge_end[select_l_r_edges]
-        # start_path_clip, end_path_clip, self.road_intersect_path = clip_line_segment_by_poly(path_lr_start, path_lr_end,
-        #                                                                                     self.world_track)
+        select_l_r_edges = torch.tensor([0, 2])
+        path_lr_start = path_edge_start[:, select_l_r_edges].flatten(end_dim=-2)
+        path_lr_end = path_edge_end[:, select_l_r_edges].flatten(end_dim=-2)
+        start_path_clip, end_path_clip, road_intersect_path = clip_line_segment_by_poly(path_lr_start, path_lr_end,
+                                                                                             self.world_track)
+        road_intersect_path = road_intersect_path.unflatten(0, (self.n_cars, 2))
+        self.road_intersect_path = road_intersect_path.any(1).any(1)
 
         # move car
-        # self.car_prev = copy(self.car)
-        # self.car.pos += torch.zeros_like(self.)
-        # self.car.theta += steer_angle
+        self.car_prev = copy(self.car)
+        self.car.pos += - path_edge_end[:, 0] + path_edge_start[:, 0]
+        self.car.theta += steer_angle
 
         # return agent inputs
         self.beam_origin, self.beam_end, beam_len = self.cast_lidar()
-        state = beam_len / params['MAX_BEAM_LEN'] # normalize the beam_len
-        # reward = self.road_intersect_path.sum() - 0.1
+        state = beam_len / params['MAX_BEAM_LEN']  # normalize the beam_len
+        reward = self.road_intersect_path.sum(0) - 0.1
         done = self.path_off_road
         info = {}
-        return state, 0., done, info
+        return state, reward, done, info
 
     def draw_track(self):
         self.camera.draw_polygon(self.world_track, self.track_colors[0])
         self.camera.draw_line(self.road_start, self.road_end, color=WHITE, width=4)
+
+    def draw_car_path(self):
+        # draw car path
+        if self.road_intersect_path is not None:
+            path_colors = torch.empty((self.path_off_road.shape[0], 3), dtype=torch.uint8)
+            path_colors[self.path_off_road] = torch.tensor(RED, dtype=torch.uint8)
+            path_colors[~self.path_off_road] = torch.tensor(GREEN, dtype=torch.uint8)
+            self.camera.draw_polygon(self.car_path.world_verts(), path_colors)
 
     def render(self, mode='human', fps=2):
 
@@ -424,39 +441,23 @@ class CarRacingPathEnv(gym.Env):
         self.camera.DISPLAY.fill(LIGHT_GREEN)
         self.draw_track()
 
-        # if self.road_intersect_path is not None:
-        #     # draw road highlights
-        #     for road_intersect_path, poly in zip(self.road_intersect_path.permute(1, 0), self.world_track):
-        #         if road_intersect_path.any():
-        #             pygame.draw.polygon(self.DISPLAY, BLUE, poly.tolist())
-
         # draw car
-        # car_verts = self.car.world_verts()
-        self.camera.draw_polygon(self.car.world_verts(), RED)
-        self.camera.draw_polygon(self.car_path.world_verts(), BLUE)
-
-        # draw car path
-        # path_color = LIGHT_RED if self.path_off_road else GREEN
-        # pygame.draw.polygon(self.DISPLAY, path_color, self.path.pygame_world_verts)
-        # for s, e in zip(path_lr_start, path_lr_end):
-        #     pygame.draw.line(DISPLAY, WHITE, s.tolist(), e.tolist())
+        self.camera.draw_polygon(self.car_prev.world_verts(), RED)
+        prev_path = self.car_path.world_verts().detach().clone()
+        self.draw_car_path()
 
         pygame.display.flip()
 
         self.clock.tick(fps)
         self.camera.DISPLAY.fill(LIGHT_GREEN)
         self.draw_track()
-        self.camera.draw_polygon(self.car.world_verts(), RED)
 
         # draw car
-        # pygame.draw.polygon(self.DISPLAY, RED, self.car.pygame_world_verts)
+        self.camera.draw_polygon(prev_path, BLUE)
+        self.camera.draw_polygon(self.car.world_verts(), RED)
 
         # draw beams
-        self.camera.draw_line(self.beam_origin, self.beam_end, YELLOW, width=1)
-        # if self.beam_origin is not None:
-        #     for o, e in zip(self.beam_origin, self.beam_end):
-        #         pygame.draw.line(self.DISPLAY, YELLOW, o.tolist(), e.tolist(), width=2)
-
+        # self.camera.draw_line(self.beam_origin, self.beam_end, YELLOW, width=1)
         pygame.display.flip()
 
         for event in pygame.event.get():
@@ -466,7 +467,7 @@ class CarRacingPathEnv(gym.Env):
 
 
 def main():
-    env = CarRacingPathEnv(seed=3, n_cars=2)
+    env = CarRacingPathEnv(seed=3, n_cars=8)
 
     def policy(state):
         # simple steering angle policy with conservative moves
@@ -475,7 +476,7 @@ def main():
         index += n_max.div(2, rounding_mode='trunc')
         turn = index - params['N_BEAMS'] // 2
         turn = turn * 1. / 8.
-        dist = dist/2. * params['MAX_BEAM_LEN'] / params['MAX_TARGET_DISTANCE']
+        dist = dist / 2. * params['MAX_BEAM_LEN'] / params['MAX_TARGET_DISTANCE']
         return torch.stack([turn, dist], dim=-1)
 
     state = env.reset()
