@@ -392,11 +392,10 @@ class CarRacingPathEnv(gym.Env):
 
         # detect road polygons in path
         select_l_r_edges = torch.tensor([0, 2])
-        path_lr_start = path_edge_start[:, select_l_r_edges].flatten(end_dim=-2)
-        path_lr_end = path_edge_end[:, select_l_r_edges].flatten(end_dim=-2)
+        path_lr_start = path_edge_start[:, select_l_r_edges]
+        path_lr_end = path_edge_end[:, select_l_r_edges]
         start_path_clip, end_path_clip, road_intersect_path = clip_line_segment_by_poly(path_lr_start, path_lr_end,
                                                                                         self.world_track)
-        road_intersect_path = road_intersect_path.unflatten(0, (self.n_cars, 2))
         self.road_intersect_path = road_intersect_path.any(1).any(1)
 
         # move car

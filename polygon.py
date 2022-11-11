@@ -3,6 +3,13 @@ from torch import cos, sin
 
 """
 Line segs are tuples of (N, 2) start, (N, 2) end tensors
+
+If function specifies (N..., 2), you can have any input shape you like,
+as long as you make the last dimension 2 (x, y)
+
+If function specifies (... D) then the function will work for any input shape
+the last dimension will be consider the number of spacial Dimensions
+
 Polygons are in (P, V, 2) tensor -> P - polygon, V - vertices, 2 - dimensions
 CLOCKWISE winding for polygons 
 """
@@ -65,13 +72,13 @@ def midpoint(start, end):
 
 def clip_line_segment_by_poly(start, end, clipping_poly):
     """
-    start: (N, 2) tensor containing N start points
-    end: (N, 2) tensor containing N end points
+    start: (N..., 2) tensor containing N start points
+    end: (N..., 2) tensor containing N end points
     clipping_polygons: (P, V, 2) tensor containing P polygons of V vertices with CLOCKWISE winding
     returns:
-        (N, 2) tensor of clip enter points
-        (N, 2) tensor of clip exit points
-        (N) boolean tensor, True if line intersects polygon
+        (N..., P, 2) tensor of clip enter points
+        (N..., P, 2) tensor of clip exit points
+        (N..., P) boolean tensor, True if line intersects polygon
     """
     with torch.no_grad():
         # Cyrus Beck algorithm
@@ -79,6 +86,12 @@ def clip_line_segment_by_poly(start, end, clipping_poly):
         # P0: start point of the line segment
         # P1: end point of the line segment
         # PEi: the vertices of the polygon
+
+        # pack the input tensors
+        assert start.shape == end.shape, "start and end must be same shape"
+        N = start.shape[:-1]
+        start = start.flatten(end_dim=-2)
+        end = end.flatten(end_dim=-2)
 
         start = start.unsqueeze(1).unsqueeze(1)
         end = end.unsqueeze(1).unsqueeze(1)
@@ -114,7 +127,7 @@ def clip_line_segment_by_poly(start, end, clipping_poly):
         p_enter = m * t_enter + b
         p_exit = m * t_exit + b
 
-        return p_enter, p_exit, inside.squeeze(-1)
+        return p_enter.unflatten(0, N), p_exit.unflatten(0, N), inside.squeeze(-1).unflatten(0, N)
 
 
 def is_inside(es, ee, p):
@@ -893,7 +906,7 @@ if __name__ == '__main__':
     plot_line_segments(axes[4], l2_start, l2_end, )
     plot_line_segments(axes[4], ray_origin, ray_far_end, linestyle='dotted')
 
-    ray_origin, ray_end, ray_len, ray_index = raycast(ray_origin, ray_vector, l2_start, l2_end)
+    ray_origin, ray_end, ray_len, ray_hit, ray_index = raycast(ray_origin, ray_vector, l2_start, l2_end)
 
     plot_line_segments(axes[4], ray_origin, ray_end)
 
