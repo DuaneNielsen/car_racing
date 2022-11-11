@@ -8,7 +8,6 @@ import torch
 import polygon
 from polygon import raycast, line_seg_intersect, edges, clip_line_segment_by_poly, roll, Camera
 from math import radians
-from copy import copy
 
 
 def create_track(seed):
