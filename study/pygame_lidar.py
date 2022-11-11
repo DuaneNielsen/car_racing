@@ -6,8 +6,7 @@ import gym
 from gym.utils import seeding
 import torch
 import polygon
-from polygon import raycast, line_seg_intersect, edges, clip_line_segment_by_poly, roll, transform_matrix, \
-    apply_transform
+from polygon import raycast, line_seg_intersect, edges, clip_line_segment_by_poly, roll, Camera
 from math import radians
 from copy import copy
 
@@ -245,16 +244,6 @@ CAR = hex_rgb('d00000')
 PATH_CLEAR = hex_rgb('7ae582')
 PATH_BLOCKED = (255, 160, 160)
 BEAMS = hex_rgb('ffba08')
-
-
-class Camera:
-    def __init__(self, se2, scale):
-        self.se2 = se2 if len(se2.shape) == 2 else se2.unsqueeze(0)
-        self.scale = scale if len(scale.shape) == 2 else scale.unsqueeze(0)
-
-    def transform(self, verts):
-        t_matrix = transform_matrix(self.se2, self.scale)
-        return apply_transform(t_matrix, verts)
 
 
 class PygameCamera(Camera):

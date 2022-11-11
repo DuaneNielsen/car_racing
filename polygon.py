@@ -394,8 +394,14 @@ def transform_matrix(se2, scale=None):
     return transform_matrix
 
 
-def to_pygame_poly(verts):
-    return [v for v in zip(verts[0], verts[1])]
+class Camera:
+    def __init__(self, se2, scale):
+        self.se2 = se2 if len(se2.shape) == 2 else se2.unsqueeze(0)
+        self.scale = scale if len(scale.shape) == 2 else scale.unsqueeze(0)
+
+    def transform(self, verts):
+        t_matrix = transform_matrix(self.se2, self.scale)
+        return apply_transform(t_matrix, verts)
 
 
 class Model:
@@ -539,10 +545,6 @@ class Polygon:
     def world_verts(self):
         M = translate2D(rotate2D(scale2D(torch.eye(3), self.scale), self._theta), self.pos)
         return torch.matmul(M, self.verts_homo).T[:, 0:2]
-
-    @property
-    def pygame_world_verts(self):
-        return to_pygame_poly(self.world_verts.T)
 
     @staticmethod
     def stack(polys):
