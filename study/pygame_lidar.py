@@ -233,14 +233,18 @@ def create_track(seed):
     return np.array(road_poly), road_colors, np.array(road_left), np.array(road_right), track
 
 
-WHITE = (255, 255, 255)
-GRAY = (200, 200, 200)
+def hex_rgb(h):
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+ROAD_EDGE = hex_rgb('d6d5c9')
+ROAD = (200, 200, 200)
+ROAD = hex_rgb('032b43')
 BLUE = (0, 0, 255)
-GREEN = (0, 255, 0)
-YELLOW = (255, 255, 0)
-LIGHT_GREEN = (160, 255, 180)
-RED = (255, 0, 0)
-LIGHT_RED = (255, 160, 160)
+PATH_CLEAR = hex_rgb('7ae582')
+BEAMS = hex_rgb('ffba08')
+GRASS = hex_rgb('136f63')
+CAR = hex_rgb('d00000')
+PATH_BLOCKED = (255, 160, 160)
 
 
 class Camera:
@@ -365,11 +369,14 @@ class CarRacingPathEnv(gym.Env):
     def reset(self):
         self.path_off_road = False
         self.road_intersect_path = None
-        self.car.body.se2[:, :] = 0.
-        self.car.body.scale[:, :] = 1.
+        # self.car.body.se2[:, :] = 0.
+        # self.car.body.scale[:, :] = 1.
 
         self.car.body.pos = self.car_start_pos
         self.car.body.theta = self.car_start_theta
+        self.car_prev.body.pos = self.car_start_pos
+        self.car_prev.body.theta = self.car_start_theta
+
         self.beam_origin, self.beam_end, beam_len = self.cast_lidar()
         return beam_len / params['MAX_BEAM_LEN']
 
@@ -415,37 +422,37 @@ class CarRacingPathEnv(gym.Env):
 
     def draw_track(self):
         self.camera.draw_polygon(self.world_track, self.track_colors[0])
-        self.camera.draw_line(self.road_start, self.road_end, color=WHITE, width=4)
+        self.camera.draw_line(self.road_start, self.road_end, color=ROAD_EDGE, width=4)
 
     def draw_car_path(self, car):
         # draw car path
         if self.road_intersect_path is not None:
             path_colors = torch.empty((self.path_off_road.shape[0], 3), dtype=torch.uint8)
-            path_colors[self.path_off_road] = torch.tensor(RED, dtype=torch.uint8)
-            path_colors[~self.path_off_road] = torch.tensor(GREEN, dtype=torch.uint8)
+            path_colors[self.path_off_road] = torch.tensor(PATH_BLOCKED, dtype=torch.uint8)
+            path_colors[~self.path_off_road] = torch.tensor(PATH_CLEAR, dtype=torch.uint8)
             self.camera.draw_polygon(car.path.world_verts(), path_colors)
 
     def render(self, mode='human', fps=2):
 
         self.clock.tick(fps)
-        self.camera.DISPLAY.fill(LIGHT_GREEN)
+        self.camera.DISPLAY.fill(GRASS)
         self.draw_track()
 
         # draw car state before transition
-        self.camera.draw_polygon(self.car_prev.body.world_verts(), RED)
+        self.camera.draw_polygon(self.car_prev.body.world_verts(), CAR)
         self.draw_car_path(self.car_prev)
 
         pygame.display.flip()
 
         self.clock.tick(fps)
-        self.camera.DISPLAY.fill(LIGHT_GREEN)
+        self.camera.DISPLAY.fill(GRASS)
         self.draw_track()
 
         # draw car state after transition
-        self.camera.draw_polygon(self.car.body.world_verts(), RED)
+        self.camera.draw_polygon(self.car.body.world_verts(), CAR)
 
         # draw beams
-        self.camera.draw_line(self.beam_origin, self.beam_end, YELLOW, width=1)
+        self.camera.draw_line(self.beam_origin, self.beam_end, BEAMS, width=1)
         pygame.display.flip()
 
         for event in pygame.event.get():
