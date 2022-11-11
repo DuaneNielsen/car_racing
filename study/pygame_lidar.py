@@ -236,15 +236,15 @@ def create_track(seed):
 def hex_rgb(h):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
+
 ROAD_EDGE = hex_rgb('d6d5c9')
-ROAD = (200, 200, 200)
 ROAD = hex_rgb('032b43')
 BLUE = (0, 0, 255)
-PATH_CLEAR = hex_rgb('7ae582')
-BEAMS = hex_rgb('ffba08')
 GRASS = hex_rgb('136f63')
 CAR = hex_rgb('d00000')
+PATH_CLEAR = hex_rgb('7ae582')
 PATH_BLOCKED = (255, 160, 160)
+BEAMS = hex_rgb('ffba08')
 
 
 class Camera:
@@ -335,6 +335,8 @@ class CarRacingPathEnv(gym.Env):
             return track_info[i][1]
 
         self.world_track = torch.from_numpy(self.track).float()
+        track_polygons, _, _ = self.world_track.shape
+        self.track_visited = torch.zeros((self.n_cars, track_polygons), dtype=torch.bool)
 
         road_left, road_right = torch.from_numpy(road_left).float(), torch.from_numpy(road_right).float()
 
@@ -354,7 +356,7 @@ class CarRacingPathEnv(gym.Env):
 
         self.path_off_road = False
         self.beam_origin, self.beam_end = None, None
-        self.road_intersect_path = None
+        self.road_traversed = None
 
     def cast_lidar(self):
         # lidar beams
@@ -368,7 +370,7 @@ class CarRacingPathEnv(gym.Env):
 
     def reset(self):
         self.path_off_road = False
-        self.road_intersect_path = None
+        self.road_traversed = None
         # self.car.body.se2[:, :] = 0.
         # self.car.body.scale[:, :] = 1.
 
@@ -403,7 +405,7 @@ class CarRacingPathEnv(gym.Env):
         path_lr_end = path_edge_end[:, select_l_r_edges]
         start_path_clip, end_path_clip, road_intersect_path = clip_line_segment_by_poly(path_lr_start, path_lr_end,
                                                                                         self.world_track)
-        self.road_intersect_path = road_intersect_path.any(1).any(1)
+        self.road_traversed = road_intersect_path.any(1)
 
         # move car
         self.car_prev.body.se2 = self.car.body.se2.detach().clone()
@@ -415,7 +417,9 @@ class CarRacingPathEnv(gym.Env):
         # return agent inputs
         self.beam_origin, self.beam_end, beam_len = self.cast_lidar()
         state = beam_len / params['MAX_BEAM_LEN']  # normalize the beam_len
-        reward = self.road_intersect_path.sum(0) - 0.1
+        reward = (self.road_traversed & ~self.track_visited).sum(1) - 0.1
+        self.track_visited[self.road_traversed] = True
+        self.track_visited[self.track_visited.all(1)] = False  # reset track visited when lapped
         done = self.path_off_road
         info = {}
         return state, reward, done, info
@@ -426,7 +430,7 @@ class CarRacingPathEnv(gym.Env):
 
     def draw_car_path(self, car):
         # draw car path
-        if self.road_intersect_path is not None:
+        if self.road_traversed is not None:
             path_colors = torch.empty((self.path_off_road.shape[0], 3), dtype=torch.uint8)
             path_colors[self.path_off_road] = torch.tensor(PATH_BLOCKED, dtype=torch.uint8)
             path_colors[~self.path_off_road] = torch.tensor(PATH_CLEAR, dtype=torch.uint8)
@@ -440,6 +444,11 @@ class CarRacingPathEnv(gym.Env):
 
         # draw car state before transition
         self.camera.draw_polygon(self.car_prev.body.world_verts(), CAR)
+
+        if self.road_traversed is not None:
+            track_traversed = self.world_track[None, ...].repeat(self.road_traversed.shape[0], 1, 1, 1)[self.road_traversed]
+            self.camera.draw_polygon(track_traversed, BLUE)
+
         self.draw_car_path(self.car_prev)
 
         pygame.display.flip()
@@ -464,6 +473,8 @@ class CarRacingPathEnv(gym.Env):
 def main():
     env = CarRacingPathEnv(seed=3, n_cars=8)
 
+    reward_total = torch.zeros(8)
+
     def policy(state):
         # simple steering angle policy with conservative moves
         dist, index = torch.max(state, dim=1)
@@ -479,6 +490,8 @@ def main():
     while True:
         action = policy(state)
         state, reward, done, info = env.step(action)
+        reward_total += reward
+        print(reward_total)
         env.render()
 
 
