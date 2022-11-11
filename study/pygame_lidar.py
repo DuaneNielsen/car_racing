@@ -354,15 +354,13 @@ class CarRacingPathEnv(gym.Env):
 
     def cast_lidar(self):
         # lidar beams
-        N, B = self.n_cars, params['N_BEAMS']
         lidar = self.car.lidar.world_verts()
         beam_origin, beam_end = lidar.chunk(2, dim=1)
         beam_vector = beam_end - beam_origin
-        beam_origin = beam_origin.flatten(end_dim=-2)
-        beam_vector = beam_vector.flatten(end_dim=-2)
-        ray_origin, ray_end, ray_len = raycast(beam_origin, beam_vector, self.road_start, self.road_end,
-                                               max_len=params['MAX_BEAM_LEN'])
-        return ray_origin.unflatten(0, (N, B)), ray_end.unflatten(0, (N, B)), ray_len.unflatten(0, (N, B))
+        beam_origin, beam_end, beam_len, beam_hit, beam_index =  \
+            raycast(beam_origin, beam_vector, self.road_start, self.road_end,
+                    max_len=params['MAX_BEAM_LEN'])
+        return beam_origin, beam_end, beam_len
 
     def reset(self):
         self.path_off_road = False
@@ -389,10 +387,7 @@ class CarRacingPathEnv(gym.Env):
 
         # check car_path
         path_edge_start, path_edge_end = edges(self.car.path.world_verts())
-        path_edge_start_flat, path_edge_end_flat = path_edge_start.flatten(end_dim=-2), path_edge_end.flatten(end_dim=-2)
-        p, path_intersect_roadside = line_seg_intersect(path_edge_start_flat, path_edge_end_flat, self.road_start, self.road_end)
-        path_intersect_roadside = path_intersect_roadside.unflatten(1, (self.n_cars, 4))
-        # if any of the boundaries of the box intersect the edge, the cars path is not clear
+        p, path_intersect_roadside = line_seg_intersect(path_edge_start, path_edge_end, self.road_start, self.road_end)
         self.path_off_road = path_intersect_roadside.permute(1, 0, 2).any(1).any(1)
 
         # detect road polygons in path
@@ -400,7 +395,7 @@ class CarRacingPathEnv(gym.Env):
         path_lr_start = path_edge_start[:, select_l_r_edges].flatten(end_dim=-2)
         path_lr_end = path_edge_end[:, select_l_r_edges].flatten(end_dim=-2)
         start_path_clip, end_path_clip, road_intersect_path = clip_line_segment_by_poly(path_lr_start, path_lr_end,
-                                                                                             self.world_track)
+                                                                                        self.world_track)
         road_intersect_path = road_intersect_path.unflatten(0, (self.n_cars, 2))
         self.road_intersect_path = road_intersect_path.any(1).any(1)
 
@@ -431,7 +426,7 @@ class CarRacingPathEnv(gym.Env):
             path_colors[~self.path_off_road] = torch.tensor(GREEN, dtype=torch.uint8)
             self.camera.draw_polygon(car.path.world_verts(), path_colors)
 
-    def render(self, mode='human', fps=0.3):
+    def render(self, mode='human', fps=2):
 
         self.clock.tick(fps)
         self.camera.DISPLAY.fill(LIGHT_GREEN)

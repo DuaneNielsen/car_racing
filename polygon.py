@@ -596,49 +596,111 @@ def compute_tu(t_m, t_b, u_m, u_b):
 def line_seg_intersect(t_start, t_end, u_start, u_end):
     """
     Computes intersection between two sets of line segments
-    t_start: (N, 2) start points of segments
-    t_end: (N, 2) end points of set of line segments
-    u_start: (M, 2) start points of segment set to intersect
-    u_end: (M, 2) end points of segment set to intersections
+    t_start: (N..., 2) start points of segments
+    t_end: (N..., 2) end points of set of line segments
+    u_start: (M..., 2) start points of segment set to intersect
+    u_end: (M..., 2) end points of segment set to intersections
     returns: p, mask
-        p: (M, N, 2)
-        mask: (M, N)
+        p: (M..., N..., 2)
+        mask: (M..., N...)
     """
+
+    # pack leading dimensions
+    assert t_end.shape == t_end.shape
+    assert u_start.shape == u_end.shape
+
+    N = t_start.shape[:-1]
+    M = u_start.shape[:-1]
+
+    t_start, t_end = t_start.flatten(end_dim=-2), t_end.flatten(end_dim=-2)
+    u_start, u_end = u_start.flatten(end_dim=-2), u_end.flatten(end_dim=-2)
+
     t_m, t_b = to_parametric(t_start, t_end)
     u_m, u_b = to_parametric(u_start, u_end)
 
     t, u, t_m, t_b, u_m, u_b = compute_tu(t_m, t_b, u_m, u_b)
     intersect = t.ge(0.) & t.le(1.) & u.ge(0.) & u.le(1.)
     p = t_m * t + t_b
-    return p, intersect.squeeze()
+
+    # unpack leading dimensions
+    p = p.unflatten(1, N)
+    p = p.unflatten(0, M)
+    intersect = intersect.squeeze(-1)
+    intersect = intersect.unflatten(1, N)
+    intersect = intersect.unflatten(0, M)
+
+    return p, intersect
+
+
+def unflatten_index(index, shape):
+    """
+    takes an index from a flattened tensor and converts the indices
+    so they can be applied to the unflattened version of the tensor
+    index: (N...) the index to unflatten
+    shape: the shape of the unflat tensor
+    returns tuple((N)LongTensor, (N)LongTensor), (N)LongTensor))
+
+    >>> x = torch.rand(2, 3)
+    >>> x_flat = x.flatten()
+    >>> flat_index = torch.arange(2*3)
+    >>> x_flat[flat_index]
+    tensor([-0.4634, -0.4368,  2.6794,  1.0621, -0.0302,  1.2309])
+    >>> x[unflatten_index(flat_index, (2, 3))]
+    tensor([-0.4634, -0.4368,  2.6794,  1.0621, -0.0302,  1.2309])
+    """
+
+    denominator = 1
+    co_ordinates = []
+    for i in reversed(shape):
+        co_ordinates += [(index.flatten() // denominator) % i]
+        denominator *= i
+    return tuple(reversed(co_ordinates))
 
 
 def raycast(ray_origin, ray_vector, l_start, l_end, max_len=None):
     """
     casts a ray against a set of line segments
-    ray_origin: (N, 2) ray origins
-    ray_vector: (N, 2) ray vectors
-    l_start: (M, 2) line segment starts to cast onto
-    l_end: (M, 2) line segment ends to cast onto
+    ray_origin: (N..., 2) ray origins
+    ray_vector: (N..., 2) ray vectors
+    l_start: (M..., 2) line segment starts to cast onto
+    l_end: (M..., 2) line segment ends to cast onto
+    max_len: the length to set the ray if it doesn't hit anything
     returns:
-        ray_origin: (N, 2)
-        ray_end: (N, 2)
-        mask: N - True if the ray hit a line segment, False if it didn't
+        ray_origin: (N..., 2)
+        ray_end: (N..., 2)
+        ray_hit: N - True if the ray hit a line segment, False if it didn't
+        ray_len: N - contains the length of the tensor
+        ray_index: tuple(LongTensors) containing the indices of the hit line_seg
     """
+
+    assert ray_origin.shape == ray_vector.shape, "ray_origin and ray_vector must have the same shape"
+    assert l_start.shape == l_end.shape, "l_start and l_end must have the same shape"
+
+    N, M = ray_origin.shape[:-1], l_start.shape[:-1]
+    ray_origin, ray_vector = ray_origin.flatten(end_dim=-2), ray_vector.flatten(end_dim=-2)
+    l_start, l_end = l_start.flatten(end_dim=-2), l_end.flatten(end_dim=-2)
+
     t_m, t_b = to_parametric(l_start, l_end)
     ray_vector = ray_vector / torch.linalg.vector_norm(ray_vector, dim=-1, keepdim=True)
     t, r, t_m, t_b, ray_vector, ray_origin = compute_tu(t_m, t_b, ray_vector, ray_origin)
 
     if max_len is None:
-        intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.)
-        r[~intersect] = torch.inf
+        ray_hit = t.ge(0.) & t.lt(1.0) & r.ge(0.)
+        r[~ray_hit] = torch.inf
     else:
-        intersect = t.ge(0.) & t.lt(1.0) & r.ge(0.) & r.lt(max_len)
-        r[~intersect] = max_len
+        ray_hit = t.ge(0.) & t.lt(1.0) & r.ge(0.) & r.lt(max_len)
+        r[~ray_hit] = max_len
 
-    r_length, r_index = torch.min(r, dim=1, keepdim=True)
-    ray_end = ray_origin + r_length * ray_vector
-    return ray_origin.squeeze(1), ray_end.squeeze(1), r_length.squeeze()
+    ray_length, ray_index = torch.min(r, dim=1, keepdim=True)
+    ray_end = ray_origin + ray_length * ray_vector
+
+    # not sure if this is good
+    if len(M) > 0:
+        ray_index = unflatten_index(ray_index.squeeze(), shape=M)
+
+    ray_origin, ray_end, ray_len = ray_origin.squeeze(1), ray_end.squeeze(1), ray_length.squeeze()
+    ray_origin, ray_end, ray_len = ray_origin.unflatten(0, N), ray_end.unflatten(0, N), ray_len.unflatten(0, N)
+    return ray_origin, ray_end, ray_len, ray_hit, ray_index
 
 
 if __name__ == '__main__':
@@ -831,7 +893,7 @@ if __name__ == '__main__':
     plot_line_segments(axes[4], l2_start, l2_end, )
     plot_line_segments(axes[4], ray_origin, ray_far_end, linestyle='dotted')
 
-    ray_origin, ray_end, ray_len = raycast(ray_origin, ray_vector, l2_start, l2_end)
+    ray_origin, ray_end, ray_len, ray_index = raycast(ray_origin, ray_vector, l2_start, l2_end)
 
     plot_line_segments(axes[4], ray_origin, ray_end)
 
