@@ -491,7 +491,6 @@ def main():
         action = policy(state)
         state, reward, done, info = env.step(action)
         reward_total += reward
-        print(reward_total)
         env.render()
 
 
