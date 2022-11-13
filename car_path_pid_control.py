@@ -5,14 +5,17 @@ from collections import deque
 
 
 class PIDControlEvaluator:
-    def __init__(self, num_runs=1, render=False, log=False, demo=False, fps=50, device='cpu'):
+    def __init__(self, num_runs=1, render=False, log=False, demo=False, fps=50, device='cpu', crash_penalty=0, max_episode_steps=500):
         self.num_runs = num_runs
         self.render, self.log, self.demo, self.fps = render, log, demo, fps
         self.device = device
+        self.crash_penalty = crash_penalty
+        self.max_episode_steps = max_episode_steps
 
     def __call__(self, PID, demo=False):
         N_CARS = PID.shape[0]
-        env = gym.make('CarPath-v1', n_cars=N_CARS, max_episode_steps=500, headless=not self.render, device=self.device)
+        env = gym.make('CarPath-v1', n_cars=N_CARS, max_episode_steps=self.max_episode_steps,
+                       headless=not self.render, device=self.device, crash_penalty=self.crash_penalty)
 
         reward_total = torch.zeros(N_CARS, device=self.device)
         state_buffer = deque(maxlen=5)
@@ -69,5 +72,5 @@ if __name__ == '__main__':
 
     PID = torch.tensor([ 0.6617, -0.0042,  0.8482, -0.2855,  0.2150,  1.3173, -0.0842, -0.1718], device=device)
     PID = PID[None, :].repeat(N_CARS, 1)
-    evaluate = PIDControlEvaluator(num_runs=2, render=True, fps=2, device=device)
+    evaluate = PIDControlEvaluator(num_runs=2, render=True, fps=2, device=device, crash_penalty=1000.)
     print(evaluate(PID))
