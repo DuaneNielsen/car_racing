@@ -35,7 +35,7 @@ def roll(t, dim=0):
     t: the tensor to roll
     dim: the dim to roll on
     """
-    prev = torch.arange(1, t.size(dim) + 1)
+    prev = torch.arange(1, t.size(dim) + 1, device=t.device)
     prev[-1] = 0
     return t.index_select(dim, prev)
 
@@ -357,7 +357,7 @@ def adjoint_matrix(se2):
     return torch.stack((
         torch.stack([+cos_theta, sin_theta, x], dim=-1),
         torch.stack([-sin_theta, cos_theta, y], dim=-1),
-        torch.tensor([0., 0., 1.]).repeat(N).reshape(N, 3)
+        torch.tensor([0., 0., 1.], device=se2.device).repeat(N).reshape(N, 3)
     ), dim=1)
 
 
@@ -375,7 +375,7 @@ def apply_transform(transf, verts):
         assert (N == verts.shape[0]) or (verts.shape[0] == 1) or (N == 1), \
             f"first dimension of verts must match first dimension of transforms (or be equal to 1)"
     P, V, _ = verts.shape
-    verts = torch.cat((verts, torch.ones(P, V, 1)), dim=-1)
+    verts = torch.cat((verts, torch.ones(P, V, 1, device=verts.device)), dim=-1)
     verts = torch.matmul(transf, verts.permute(0, 2, 1)).permute(0, 2, 1)
     return verts[..., 0:2]
 
@@ -396,13 +396,34 @@ def transform_matrix(se2, scale=None):
 
 class Camera:
     def __init__(self, se2, scale):
-        self.se2 = se2 if len(se2.shape) == 2 else se2.unsqueeze(0)
-        self.scale = scale if len(scale.shape) == 2 else scale.unsqueeze(0)
+        self._se2 = se2 if len(se2.shape) == 2 else se2.unsqueeze(0)
+        self._scale = scale if len(scale.shape) == 2 else scale.unsqueeze(0)
+
+    @property
+    def se2(self):
+        return self._se2
+
+    @se2.setter
+    def se2(self, se2):
+        self._se2 = se2 if len(se2.shape) == 2 else se2.unsqueeze(0)
+
+    @property
+    def scale(self):
+        return self._scale
+
+    @scale.setter
+    def scale(self, scale):
+        self._scale = scale if len(scale.shape) == 2 else scale.unsqueeze(0)
 
     def transform(self, verts):
-        t_matrix = transform_matrix(self.se2, self.scale)
-        return apply_transform(t_matrix, verts)
+        s_matrix = scale_matrix(self._scale)
+        a_matrix = adjoint_matrix(self._se2)
+        return apply_transform(s_matrix, apply_transform(a_matrix, verts))
 
+    def to(self, device):
+        self._se2 = self._se2.to(device)
+        self._scale = self._scale.to(device)
+        return self
 
 class Model:
     def __init__(self, verts, N=None):
@@ -496,6 +517,12 @@ class Model:
     def attach(self, model):
         model.parent = self
         self.children.append(model)
+
+    def to(self, device):
+        self.verts = self.verts.to(device)
+        self.se2 = self.se2.to(device)
+        self.scale = self.scale.to(device)
+        return self
 
 
 class Polygon:
