@@ -337,6 +337,9 @@ class StateRef:
     def state(self):
         return self.buffer[self.ref]
 
+    def __del__(self):
+        del self.buffer[self.ref]
+
 
 class StateBuffer:
     def __init__(self):
@@ -355,21 +358,25 @@ class StateBuffer:
 
 class VectorStateBuffer:
     def __init__(self):
-        self.states = []
+        self.states = {}
+        self.index = 0
 
     def append(self, item):
         staterefs = []
         for s in item:
-            self.states.append(s)
-            staterefs.append(StateRef(self, len(self.states) - 1))
+            self.states[self.index] = s
+            staterefs.append(StateRef(self, self.index))
+            self.index += 1
         return staterefs
 
     def __getitem__(self, item):
         return self.states[item]
 
+    def __delitem__(self, key):
+        del self.states[key]
+
     def __len__(self):
         return len(self.states)
-
 
 class EncodedStateBuffer:
     def __init__(self, encode, decode):
@@ -407,7 +414,7 @@ class ZCompressedBuffer(EncodedStateBuffer):
 class StateBufferDataset:
     def __init__(self, maxlen=None, statebuffer=None):
         self.buffer = deque(maxlen=maxlen)
-        self.statebuffer = statebuffer if statebuffer is not None else StateBuffer()
+        self.statebuffer = statebuffer if statebuffer is not None else StateBuffer(maxlen=maxlen+100)
 
     def append(self, item):
         self.buffer.append(item)
@@ -430,6 +437,11 @@ class VectorStateBufferDataset:
         for j in range(B):
             if info['reset'][j] == False:
                 transition = [elem[j] for elem in item]
+                # remove the old states from statebuffer
+                if self.buffer.maxlen is not None:
+                    if len(self.buffer) == self.buffer.maxlen:
+                        s, a, s_old, r, d = self.buffer[-1]
+                        del s_old
                 self.buffer.append(transition)
 
     def __len__(self):

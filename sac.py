@@ -198,7 +198,7 @@ if __name__ == '__main__':
 
     """ train loop """
     evaluator = wandb_utils.Evaluator()
-    buffer = wandb_utils.VectorStateBufferDataset()
+    buffer = wandb_utils.VectorStateBufferDataset(maxlen=100)
     dl = None
 
     for step, (s, a, s_p, r, d, i) in enumerate(wandb_utils.step_environment(train_env, policy, buffer,
