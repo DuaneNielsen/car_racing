@@ -33,9 +33,9 @@ if __name__ == '__main__':
 
     """ main loop control """
     parser.add_argument('--max_steps', type=int, default=100000)
-    parser.add_argument('--test_samples', type=int, default=3)
-    parser.add_argument('--test_steps', type=int, default=10000)
-    parser.add_argument('--test_episodes', type=int, default=16)
+    parser.add_argument('--test_sample_n_episodes', type=int, default=3)
+    parser.add_argument('--test_max_steps', type=int, default=300)
+    parser.add_argument('--test_every_n_steps', type=int, default=10000)
     parser.add_argument('--test_capture', action='store_true', default=False)
     parser.add_argument('--test_render', action='store_true', default=False)
 
@@ -46,6 +46,7 @@ if __name__ == '__main__':
     """ environment """
     parser.add_argument('--env_name', type=str, default='CarPath-v1')
     parser.add_argument('--env_render', action='store_true', default=False)
+    parser.add_argument('--env_reset_after_n_steps', type=int, default=300)
     parser.add_argument('--env_reward_scale', type=float, default=1.0)
     parser.add_argument('--env_reward_bias', type=float, default=0.0)
 
@@ -70,7 +71,7 @@ if __name__ == '__main__':
     """ environment """
     def make_env(n_cars, render_fps, max_episode_steps=None, headless=False):
         env = gym.make(config.env_name, n_cars=n_cars, render_fps=render_fps, headless=headless,
-                       max_episode_steps=max_episode_steps,
+                       max_episode_steps=max_episode_steps, device=config.device
                        ).unwrapped
         if config.seed is not None:
             env.seed(config.seed)
@@ -79,12 +80,12 @@ if __name__ == '__main__':
 
 
     """ training env with replay buffer """
-    train_env = make_env(n_cars=16, render_fps=100)
+    train_env = make_env(n_cars=16, render_fps=100, headless=not config.env_render)
     if config.debug:
         train_env = Plot(train_env, episodes_per_point=5, title=f'Train sac-{config.env_name}')
 
     """ test env """
-    test_env = make_env(n_cars=1, render_fps=50, max_episode_steps=100)
+    test_env = make_env(n_cars=1, render_fps=50, max_episode_steps=config.test_max_steps, headless=not config.test_render)
     if config.debug:
         test_env = Plot(test_env, episodes_per_point=1, title=f'Test sac-{config.env_name}')
 
@@ -109,10 +110,10 @@ if __name__ == '__main__':
         def __init__(self, input_dims, hidden_dims, actions, min_action, max_action):
             super().__init__()
             self.soft_mlp = SoftMLP(input_dims, hidden_dims, actions)
-            # self.min = min_action
-            # self.max = max_action
-            self.min = torch.tensor([-1., -1.])
-            self.max = torch.tensor([1., 1.])
+            self.min = min_action
+            self.max = max_action
+            # self.min = torch.tensor([-1., -1.])
+            # self.max = torch.tensor([1., 1.])
 
         def forward(self, state):
             mu, scale = self.soft_mlp(state)
@@ -140,6 +141,9 @@ if __name__ == '__main__':
                 values += [q(sa)]
             return torch.stack(values, dim=-1)
 
+        def to(self, device):
+            self.q = [q.to(device) for q in self.q]
+            return self
 
     q_net = QNet(
         input_dims=test_env.observation_space.shape[0],
@@ -179,7 +183,7 @@ if __name__ == '__main__':
             action = policy_net(state)
             a = action.rsample()
             assert ~torch.isnan(a).any()
-            return a.numpy()
+            return a
 
 
     """ policy to run on environment """
@@ -190,7 +194,7 @@ if __name__ == '__main__':
             action = policy_net(state)
             a = action.mean
             assert ~torch.isnan(a).any()
-            return a.numpy()
+            return a
 
 
     """ demo  """
@@ -198,17 +202,22 @@ if __name__ == '__main__':
 
     """ train loop """
     evaluator = wandb_utils.Evaluator()
-    buffer = wandb_utils.VectorStateBufferDataset(maxlen=100)
+    buffer = wandb_utils.VectorStateBufferDataset(maxlen=100000)
     dl = None
+    render_time = 0
 
     for step, (s, a, s_p, r, d, i) in enumerate(wandb_utils.step_environment(train_env, policy, buffer,
-                                                                             reset_after_n_steps=config.test_steps,
+                                                                             reset_after_n_steps=config.env_reset_after_n_steps,
                                                                              render=config.env_render)):
-        reset_train_env = False
         buffer.append((s, a, s_p, r, d), i)
 
         if dl is None:
             dl = DataLoader(buffer, batch_size=config.batch_size, sampler=RandomSampler(buffer, replacement=True))
+
+        # give pygame a bit of time so that linux doensnt complain
+        if config.test_render and not config.env_render and render_time % 100 == 0:
+            test_env.render()
+        render_time += 1
 
         if len(buffer) < config.batch_size * config.q_update_ratio:
             continue
@@ -219,9 +228,9 @@ if __name__ == '__main__':
                   alpha=config.alpha, device=config.device, precision=config.precision)
 
         """ test """
-        if evaluator.evaluate_now(config.test_steps):
+        if evaluator.evaluate_now(config.test_every_n_steps):
             evaluator.evaluate(test_env, exploit_policy, run_dir=config.run_dir, capture=config.test_capture,
-                               render=config.test_render, sample_n=config.test_samples,
+                               render=config.test_render, sample_n=config.test_sample_n_episodes,
                                params={'q': q_net, 'q_optim': q_optim, 'policy': policy_net,
                                        'policy_optim': policy_optim})
             reset_train_env = True

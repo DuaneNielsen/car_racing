@@ -99,7 +99,7 @@ def step_environment(env, policy, ds, reset_after_n_steps, render=False, timing=
 
         if global_step % reset_after_n_steps == 0:
             state, state_info = env.reset(), {}
-            state_ref = state_buffer.append(state)
+            state_ref = state_buffer.append(state.clone().detach().cpu())
             wandb.log({'epi_returns': epi_returns, 'epi_len': epi_len}, step=global_step)
             epi_returns = 0
             epi_len = 0
@@ -112,7 +112,16 @@ def step_environment(env, policy, ds, reset_after_n_steps, render=False, timing=
             policy_t = time.time()
 
         state_p, reward, done, info = env.step(action)
-        state_p_ref = state_buffer.append(state_p)
+
+        reward = reward.detach().cpu()
+        done = done.detach().cpu()
+
+        for key in info:
+            item = info[key]
+            if isinstance(item, torch.Tensor):
+                info[key] = item.detach().cpu()
+
+        state_p_ref = state_buffer.append(state_p.clone().detach().cpu())
 
         if timing:
             step_t = time.time()
@@ -122,6 +131,7 @@ def step_environment(env, policy, ds, reset_after_n_steps, render=False, timing=
 
         if timing:
             render_t = time.time()
+
 
         yield state_ref, action, state_p_ref, reward, done, info
 
@@ -198,6 +208,7 @@ def episode(env, policy, render=False, delay=0.01, capture=False):
 
         while not all_done(done):
             state, reward, done, info = env.step(action)
+            reward = reward.detach().cpu()
             if returns is None:
                 returns = torch.zeros_like(reward)
             returns += reward
