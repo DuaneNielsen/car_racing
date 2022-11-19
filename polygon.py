@@ -1,5 +1,5 @@
 import torch
-from torch import cos, sin
+from torch import cos, sin, arccos
 
 """
 Line segs are tuples of (N, 2) start, (N, 2) end tensors
@@ -361,6 +361,13 @@ def adjoint_matrix(se2):
     ), dim=1)
 
 
+def se2_from_adjoint(adjoint):
+    x = adjoint[:, 0, 2]
+    y = adjoint[:, 1, 2]
+    theta = arccos(adjoint[:, 0, 0]) * -torch.sign(adjoint[:, 1, 0])
+    return torch.stack([x, y, theta], dim=1)
+
+
 def apply_transform(transf, verts):
     """
     transf: a (N, 3, 3) homogenous transformation matrix
@@ -418,12 +425,109 @@ class Camera:
     def transform(self, verts):
         s_matrix = scale_matrix(self._scale)
         a_matrix = adjoint_matrix(self._se2)
-        return apply_transform(s_matrix, apply_transform(a_matrix, verts))
+        return apply_transform(a_matrix, apply_transform(s_matrix, verts))
 
     def to(self, device):
         self._se2 = self._se2.to(device)
         self._scale = self._scale.to(device)
         return self
+
+
+class AbstractModel:
+    def __init__(self, N):
+        """
+        Abstract class to represent a 2D geometry object
+        """
+        self.se2 = torch.zeros(N, 3)
+        self.scale = torch.ones(N, 2)
+        self.parent = None
+        self.children = []
+
+    @property
+    def N(self):
+        """
+        returns the number of model instances
+        """
+        return self.se2.shape[0]
+
+    @property
+    def __len__(self):
+        return self.N
+
+    @property
+    def pos(self):
+        """
+        returns N, 2 model positions
+        """
+        return self.se2[:, 0:2]
+
+    @pos.setter
+    def pos(self, pos):
+        """
+        pos: (N, 2)
+        """
+        self.se2[:, 0:2] = pos
+
+    @property
+    def theta(self):
+        """
+        returns theta angle in radians
+        """
+        return self.se2[:, 2]
+
+    @theta.setter
+    def theta(self, theta):
+        """
+        theta: (N) in radians
+        """
+        self.se2[:, 2] = theta
+
+    def parents(self):
+        parents = []
+        parent = self.parent
+        while parent is not None:
+            parents += [parent]
+            parent = parent.parent
+        return parents
+
+    def world(self):
+        """
+        return the object geometry in world space
+        use world transform to to it
+
+        eg:
+            return apply_transform(self.world_transform(), self.mygeometry)
+        """
+
+    def world_transform(self):
+        t_matrix = transform_matrix(self.se2, self.scale)
+        for parent in self.parents():
+            parent_t_matrix = transform_matrix(parent.se2, parent.scale)
+            t_matrix = torch.matmul(parent_t_matrix, t_matrix)
+        return t_matrix
+
+    def attach(self, model):
+        model.parent = self
+        self.children.append(model)
+
+    def to(self, device):
+        self.verts = self.verts.to(device)
+        self.se2 = self.se2.to(device)
+        self.scale = self.scale.to(device)
+        return self
+
+
+class Circle(AbstractModel):
+    def __init__(self, center=None, radius=1, N=1, scale_in='x'):
+        self.center = center if center is not None else torch.zeros(1, 1, 2)
+        self.radius = radius
+        self.scale_in = scale_in
+        super().__init__(N)
+
+    def world(self):
+        radius = self.radius * self.scale[:, 0] if self.scale_in is 'x' else self.radius * self.scale[:, 1]
+        return apply_transform(self.world_transform(), self.center), radius
+
 
 class Model:
     def __init__(self, verts, N=None):
@@ -513,6 +617,13 @@ class Model:
             parent_t_matrix = transform_matrix(parent.se2, parent.scale)
             t_matrix = torch.matmul(parent_t_matrix, t_matrix)
         return apply_transform(t_matrix, self.verts)
+
+    def world_transform(self):
+        t_matrix = transform_matrix(self.se2, self.scale)
+        for parent in self.parents():
+            parent_t_matrix = transform_matrix(parent.se2, parent.scale)
+            t_matrix = torch.matmul(parent_t_matrix, t_matrix)
+        return t_matrix
 
     def attach(self, model):
         model.parent = self
@@ -648,7 +759,7 @@ def line_seg_intersect(t_start, t_end, u_start, u_end):
     """
 
     # pack leading dimensions
-    assert t_end.shape == t_end.shape
+    assert t_start.shape == t_end.shape
     assert u_start.shape == u_end.shape
 
     N = t_start.shape[:-1]
