@@ -63,7 +63,7 @@ def main():
         rotator.theta += pi / 40
         DISPLAY.fill(WHITE)
         pygame.draw.polygon(DISPLAY, BLUE, fixed.pygame_world_verts)
-        area_rotator = polygonArea(rotator.world_verts)
+        area_rotator = polygonArea(rotator.world)
         clipped_verts = clip(rotator.pygame_world_verts, fixed.pygame_world_verts)
         clipped_area_rotator = polygonArea(from_pygame_poly(clipped_verts))
         assert area_rotator != clipped_area_rotator

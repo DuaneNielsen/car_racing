@@ -38,6 +38,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_every_n_steps', type=int, default=10000)
     parser.add_argument('--test_capture', action='store_true', default=False)
     parser.add_argument('--test_render', action='store_true', default=False)
+    parser.add_argument('--test_fps', type=int, default=2)
 
     """ resume settings """
     parser.add_argument('--demo', action='store_true', default=False)
@@ -80,12 +81,13 @@ if __name__ == '__main__':
 
 
     """ training env with replay buffer """
-    train_env = make_env(n_cars=16, render_fps=100, headless=not config.env_render)
+    train_env = make_env(n_cars=config.batch_size, render_fps=100, headless=not config.env_render)
     if config.debug:
         train_env = Plot(train_env, episodes_per_point=5, title=f'Train sac-{config.env_name}')
 
     """ test env """
-    test_env = make_env(n_cars=1, render_fps=50, max_episode_steps=config.test_max_steps, headless=not config.test_render)
+    test_env = make_env(n_cars=1, render_fps=config.test_fps, max_episode_steps=config.test_max_steps,
+                        headless=not config.test_render)
     if config.debug:
         test_env = Plot(test_env, episodes_per_point=1, title=f'Test sac-{config.env_name}')
 
@@ -102,7 +104,7 @@ if __name__ == '__main__':
             hidden = self.hidden(state)
             mu = self.mu(hidden)
             # scale = torch.sigmoid(self.scale(hidden)) + config.min_variance
-            scale = NNF.softplus(self.scale(hidden))
+            scale = NNF.softplus(self.scale(hidden)) + config.min_variance
             return mu, scale
 
 
@@ -198,7 +200,7 @@ if __name__ == '__main__':
 
 
     """ demo  """
-    wandb_utils.demo(config.demo, train_env, policy)
+    wandb_utils.demo(config.demo, test_env, policy)
 
     """ train loop """
     evaluator = wandb_utils.Evaluator()
@@ -216,7 +218,9 @@ if __name__ == '__main__':
 
         # give pygame a bit of time so that linux doensnt complain
         if config.test_render and not config.env_render and render_time % 100 == 0:
-            test_env.render()
+            # and why notrender a progress bar ?
+            progress = ((step % config.test_every_n_steps) * 10 // config.test_every_n_steps)
+            test_env.render(text=['[' + '#'*progress + '  ' * (10-progress) + ']'])
         render_time += 1
 
         if len(buffer) < config.batch_size * config.q_update_ratio:

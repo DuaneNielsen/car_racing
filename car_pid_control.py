@@ -6,10 +6,15 @@ from matplotlib import pyplot as plt
 import env
 import torch
 from math import radians
+import torch
+import torch.nn as nn
+import torch.nn.functional as NNF
 from torch.nn.functional import interpolate
 from collections import deque
 from torch import multiprocessing as mp
 from tqdm import tqdm
+import checkpoint
+from distributions import ScaledTanhTransformedGaussian
 
 """
 PID control of car from visual input
@@ -213,6 +218,160 @@ class Evaluator():
         return reward_total
 
 
+class SoftMLP(nn.Module):
+    def __init__(self, input_dims, hidden_dims, out_dims):
+        super().__init__()
+        self.hidden = nn.Sequential(nn.Linear(input_dims, hidden_dims), nn.SELU(inplace=True),
+                                    nn.Linear(hidden_dims, hidden_dims), nn.SELU(inplace=True))
+        self.mu = nn.Linear(hidden_dims, out_dims)
+        self.scale = nn.Linear(hidden_dims, out_dims)
+
+    def forward(self, state):
+        hidden = self.hidden(state)
+        mu = self.mu(hidden)
+        # scale = torch.sigmoid(self.scale(hidden)) + config.min_variance
+        scale = NNF.softplus(self.scale(hidden))
+        return mu, scale
+
+
+class Policy(nn.Module):
+    def __init__(self, input_dims, hidden_dims, actions, min_action, max_action):
+        super().__init__()
+        self.soft_mlp = SoftMLP(input_dims, hidden_dims, actions)
+        self.min = min_action
+        self.max = max_action
+        # self.min = torch.tensor([-1., -1.])
+        # self.max = torch.tensor([1., 1.])
+
+    def forward(self, state):
+        mu, scale = self.soft_mlp(state)
+        return ScaledTanhTransformedGaussian(mu, scale, min=self.min, max=self.max)
+
+
+class NeuralGuidedPIDEvaluator:
+    def __init__(self, plot=False, render=False, log=False, demo=False):
+        self.plot, self.render, self.log, self.demo = plot, render, log, demo
+        # self.env.viewer.window.on_key_press = key_press
+        # self.env.viewer.window.on_key_release = key_release
+        if plot:
+            self.fig, self.axes = plt.subplots()
+        else:
+            self.fig, self.axes = None, None
+        self.lidar_to_angle_dist = Policy(13, 16, 2, -1, 1.)
+        checkpoint.load('runs/run_106', 'best', policy=self.lidar_to_angle_dist)
+
+    def __call__(self, batch_params, demo=False):
+        return self.run_batch(batch_params)
+
+    def run_batch(self, batch_params):
+        results = []
+        for params in batch_params:
+            results += [self.episode(params)]
+        return np.array(results)
+
+    def episode(self, params):
+        """
+        params: [P_throttle, I_throttle, D_throttle, P_steering, I_steering, D_steering, max_speed]
+        """
+        P_t, I_t, D_t = params[0], params[1], params[2]
+        P_s, I_s, D_s = params[3], params[4], params[5]
+        # max_speed = params[6]
+        throttle_cuttoff = params[6]
+
+        self.env = gym.make('CarRacing-v1')
+        obs, done = self.env.reset(), False
+        a = self.env.action_space.sample()
+
+        if self.render:
+            self.env.render()
+
+        num_beams = 13
+        origins = torch.tensor([
+            [60.] * num_beams,
+            [48.] * num_beams,
+        ]).T
+        angles = torch.tensor(
+            [radians(180. + theta) for theta in torch.linspace(45., -45, num_beams)]
+        )
+        steering_directions_a = torch.linspace(-1., 1., num_beams)
+        vec_norm = angle_to_norm(angles)
+
+        integral = deque([51.], maxlen=5)
+        integral_steering = deque([0.], maxlen=5)
+
+        reward_total = 0
+
+        while not done or self.demo:
+            obs, reward, done, info = self.env.step(a)
+            reward_total += reward
+            speed = info['speed'].length / 100.
+
+            # get the sdf
+            sdf, sign = vision_utils.road_distance_field(obs, vision_utils.road_segment)
+            sdf = torch.from_numpy(sdf)
+
+            # cast rays using sphere marching
+            end, distance = sphere_march(origins, vec_norm, sdf)
+            distance_norm = distance / 40.
+
+            output_dist = self.lidar_to_angle_dist(distance_norm.float().abs())
+            output = output_dist.mean
+            steering_direction, dist = output[0], output[1]
+
+            # get the longest ray, this is the direction we want to go
+            # i = torch.argmax(distance)
+            # d = distance[i].item() / 55.
+            # dist = d if d > 0.1 else 0.1
+
+            # PID controller - steering
+            integral_steering_D = steering_direction - integral_steering[-1]
+            integral_steering.append(steering_direction)
+            a[0] = steering_direction * P_s + sum(integral_steering) / len(
+                integral_steering) * I_s + integral_steering_D * D_s
+
+            # PID controller - speed
+            derivative = dist - integral[-1]
+            integral.append(dist)
+            throttle = dist * P_t + sum(integral) / len(integral) * I_t + derivative * D_t
+
+            # a[1] = throttle if throttle > 0. and speed < max_speed else 0.
+            # a[2] = abs(throttle) if throttle < 0. else 0.
+            a[1] = throttle if throttle > throttle_cuttoff else 0.
+            a[2] = abs(throttle) if throttle < throttle_cuttoff else 0.
+
+            if self.log:
+                print(
+                    f'reward: {reward_total} speed: {speed:.2f}, steering: {a[0]:.2f}, throttle: {a[1]:.2f}, brake: {a[2]:.2f}')
+
+            if self.plot:
+                # visualise
+                self.axes.clear()
+                try:
+                    self.axes.set_array(sdf.T)
+                except AttributeError:
+                    self.axes.imshow(sdf.T)
+                line = torch.stack((origins, end), dim=-1)
+                for l in range(line.shape[0]):
+                    color = 'blue'
+                    # if l == i:
+                    #     color = 'red'
+                    self.axes.plot(line[l, 0], line[l, 1], color=color)
+
+                plt.pause(0.01)
+
+            if self.render:
+                self.env.render()
+
+            if done and self.demo:
+                self.env.reset()
+                a = np.array([0.0, 0.0, 0.0])
+
+
+        # complete, return result
+        self.env.close()
+        return reward_total
+
+
 class MpEvaluator(Evaluator):
     def __init__(self, num_workers):
         super().__init__()
@@ -229,7 +388,8 @@ class MpEvaluator(Evaluator):
 
 
 if __name__ == '__main__':
-    eval = Evaluator(render=True, plot=True, log=True, demo=True)
+    # eval = Evaluator(render=True, plot=True, log=True, demo=True)
+    eval = NeuralGuidedPIDEvaluator(render=True, plot=True, log=True, demo=True)
 
     """
     t -> throttle, s -> steering
@@ -245,4 +405,7 @@ if __name__ == '__main__':
     params = [ 0.5290,  1.4023, -0.0398,  0.1445,  0.4489,  0.6587,  0.5192]
     params = [0.5172, 1.2380, 0.0180, 0.0952, 0.4438, 0.6632, 0.5539]
     # params = [0.5000, 1.2762, -0.0147, 0.1130, 0.4614, 0.6865, 0.5519]
-    sdf, origins, end = eval.episode(params)
+
+
+    # neural pid
+    sdf, origins, end = eval.episode([ 0.0174, -0.5831,  0.2954,  0.3709,  0.6520, -0.1167,  0.5891,  0.9931])

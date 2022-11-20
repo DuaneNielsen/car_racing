@@ -52,3 +52,19 @@ def test_unflatten_index_partial():
     index = index_start[co_ordinate]
 
     assert index_start.eq(index.unflatten(0, (3, 4, 5))).all()
+
+
+def test_se2_from_adjoint():
+
+    def compare_angle(theta):
+        se2 = torch.tensor([[0., 0., theta]])
+        R = polygon.adjoint_matrix(se2)
+        x = polygon.se2_from_adjoint(R)
+        assert torch.allclose(se2 % (torch.pi * 2), x % (torch.pi * 2))
+
+    compare_angle(torch.pi/2)
+    compare_angle(torch.pi/4)
+    compare_angle(torch.pi)
+    compare_angle(-torch.pi / 4)
+    compare_angle(torch.pi * 1.5)
+    compare_angle(-torch.pi * 1.5)

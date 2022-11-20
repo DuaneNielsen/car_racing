@@ -1,19 +1,18 @@
 import pygame, sys
 from pygame import Vector2
-from polygon import adjoint_matrix, apply_transform, Model, se2_from_adjoint, Circle
+from polygon import adjoint_matrix, apply_transform, Polygon, se2_from_adjoint, Circle, PygameCamera
 import torch
 import pygame.locals
 from math import cos, sin
-from env.car_path import PygameCamera
 
 # clockwise winding required for the clipping to work
 H, W = 20., 5.
-car = Model([
+car = Polygon([
     [W, W, -W, -W],
     [H, -H, -H, H],
 ], N=2)
 
-rectm = Model([
+rectm = Polygon([
     [W/2, W/2, -W/2, -W/2],
     [1., 0, 0, 1.],
 ], N=2)
@@ -27,17 +26,15 @@ def joint_transform(theta, l):
     return adjoint_matrix(torch.tensor([[0., l, theta]]))
 
 
-def forward_kinematics_dh(theta1, length1, theta2, length2, theta3, length3, theta4, length4):
+def forward_kinematics_dh(theta1, length1, theta2, length2, theta3, length3):
     T01 = joint_transform(theta1, length1)
     T12 = joint_transform(theta2, length2)
     T23 = joint_transform(theta3, length3)
-    T34 = joint_transform(theta4, length4)
     J1 = T01
     J2 = T01.matmul(T12)
     J3 = T01.matmul(T12.matmul(T23))
-    J4 = T01.matmul(T12.matmul(T23.matmul(T34)))
-    return (J1, J2, J3, J4), (length1, length2, length3, length4)
-
+    return (J1, J2, J3), (length1, length2, length3)
+#
 
 def main():
     pygame.init()
@@ -73,24 +70,23 @@ def main():
         theta2 = t
         theta3 = t
 
-        (J1, J2, J3, J4), (l1, l2, l3, l4) = forward_kinematics_dh(theta1, 0., theta2, H, theta3, H, 0., H)
+        (J1, J2, J3), (l1, l2, l3) = forward_kinematics_dh(theta1, 0., theta2, H, theta3, H)
 
         def draw_joint(T, color, length=1.):
             se2 = se2_from_adjoint(T)
             rectm.se2 = se2
             circlem.se2 = se2
             rectm.scale = torch.tensor([[1., length]])
-            camera.draw_polygon(rectm.world_verts(), color)
+            camera.draw_polygon(rectm.world(), color)
             camera.draw_circle(*circlem.world(), color)
 
         vec = torch.zeros_like(car.pos)
         vec[:, 0] = sin(t)
         car.pos += vec
-        camera.draw_polygon(car.world_verts(), RED)
+        camera.draw_polygon(car.world(), RED)
         draw_joint(J1, BLUE, H)
         draw_joint(J2, GRAY, l2)
         draw_joint(J3, GREEN, l3)
-        draw_joint(J4, RED, l4)
 
         t += 0.03
 

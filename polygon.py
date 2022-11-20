@@ -1,3 +1,4 @@
+import pygame
 import torch
 from torch import cos, sin, arccos
 
@@ -347,7 +348,7 @@ def scale_matrix(scale):
 
 def adjoint_matrix(se2):
     """
-    Builds an adjoint matrix
+    Builds an adjoint matrixa
     """
     N = se2.shape[0]
     cos_theta = cos(se2[:, 2])
@@ -362,9 +363,29 @@ def adjoint_matrix(se2):
 
 
 def se2_from_adjoint(adjoint):
+    """
+    computes the angle of the rotation matrix by rotating a normal vector
+    and measuring the angle using arccos of the dot product
+
+    I found this to be more numerically stable than closed form approaches
+    """
+    N = adjoint.shape[0]
     x = adjoint[:, 0, 2]
     y = adjoint[:, 1, 2]
-    theta = arccos(adjoint[:, 0, 0]) * -torch.sign(adjoint[:, 1, 0])
+    x_norm = torch.zeros(N, 1, 2, device=adjoint.device)
+    x_norm[:, :, 0] = 1.
+    R = adjoint[:, 0:2, 0:2]
+
+    # apply rotation
+    v = torch.matmul(R, x_norm.permute(0, 2, 1)).permute(0, 2, 1)
+    v = v / torch.linalg.vector_norm(v, dim=-1, keepdim=True)
+
+    # take the dot product
+    dot = (x_norm * v).sum(-1)
+    theta = torch.arccos(dot).squeeze(1) * torch.sign(adjoint[:, 0, 1])
+    theta = theta % (torch.pi * 2)
+    if theta.isnan().any():
+        print('nans detected in se2 from adjoint')
     return torch.stack([x, y, theta], dim=1)
 
 
@@ -432,12 +453,68 @@ class Camera:
         self._scale = self._scale.to(device)
         return self
 
+    def draw(self, model):
+        pass
 
-class AbstractModel:
+
+class PygameCamera(Camera):
+    def __init__(self, DISPLAY, se2, scale, resolution=(1280, 764)):
+        super().__init__(se2, scale)
+        self.DISPLAY = DISPLAY
+        self.resolution = resolution
+        self.width = resolution[0]
+        self.height = resolution[1]
+        self.font = pygame.font.SysFont('freesanbold.ttf', 50)
+
+    def pick_color(self, i, color):
+        if isinstance(color, torch.Tensor):
+            return color[i].tolist()
+        else:
+            return color
+
+    def draw(self, shape):
+        if isinstance(shape, Polygon):
+            self.draw_polygon(shape.world(), shape.color)
+        elif isinstance(shape, Circle):
+            self.draw_polygon(*shape.world(), shape.color)
+
+    def draw_polygon(self, world_verts, color):
+        car_verts = self.transform(world_verts)
+        for i in range(len(world_verts)):
+            pygame.draw.polygon(self.DISPLAY, self.pick_color(i, color), car_verts[i].tolist())
+
+    def draw_line(self, origin, end, color, width=1):
+        origin, end = origin.flatten(0, -2), end.flatten(0, -2)
+        origin, end = self.transform(origin).squeeze(0), self.transform(end).squeeze(0)
+        for i, (o, e) in enumerate(zip(origin, end)):
+            pygame.draw.line(self.DISPLAY, self.pick_color(i, color), o.tolist(), e.tolist(), width=width)
+
+    def draw_circle(self, center, radius, color):
+        center = center.flatten(0, -2)
+        radius = radius.flatten(0, -1)
+        center = self.transform(center).squeeze(0)
+        for i, (c, r) in enumerate(zip(center, radius)):
+            pygame.draw.circle(self.DISPLAY, self.pick_color(i, color), c.tolist(), r.item())
+
+    def draw_text(self, texts, color, topleft=None, spacing=50):
+        topleft = (20, 20) if topleft is None else topleft
+        for i, text in enumerate(texts):
+            text1 = self.font.render(text, True, color)
+            textRect1 = text1.get_rect()
+            textRect1.topleft = topleft[0], topleft[1] + spacing * i
+            self.DISPLAY.blit(text1, textRect1)
+
+
+class AbstractShape:
+    RED = (255, 0, 0)
+    GREEN = (0, 255, 0)
+    BLUE = (0, 0, 255)
+
     def __init__(self, N):
         """
         Abstract class to represent a 2D geometry object
         """
+        self.color = self.BLUE
         self.se2 = torch.zeros(N, 3)
         self.scale = torch.ones(N, 2)
         self.parent = None
@@ -499,6 +576,13 @@ class AbstractModel:
             return apply_transform(self.world_transform(), self.mygeometry)
         """
 
+    def draw(self, camera):
+        pass
+
+    @property
+    def se2_world(self):
+        return se2_from_adjoint(self.world_transform())
+
     def world_transform(self):
         t_matrix = transform_matrix(self.se2, self.scale)
         for parent in self.parents():
@@ -511,16 +595,15 @@ class AbstractModel:
         self.children.append(model)
 
     def to(self, device):
-        self.verts = self.verts.to(device)
         self.se2 = self.se2.to(device)
         self.scale = self.scale.to(device)
         return self
 
 
-class Circle(AbstractModel):
-    def __init__(self, center=None, radius=1, N=1, scale_in='x'):
+class Circle(AbstractShape):
+    def __init__(self, center=None, radius=None, N=1, scale_in='x'):
         self.center = center if center is not None else torch.zeros(1, 1, 2)
-        self.radius = radius
+        self.radius = radius if center is not None else torch.ones(1, 1, 1)
         self.scale_in = scale_in
         super().__init__(N)
 
@@ -528,8 +611,14 @@ class Circle(AbstractModel):
         radius = self.radius * self.scale[:, 0] if self.scale_in is 'x' else self.radius * self.scale[:, 1]
         return apply_transform(self.world_transform(), self.center), radius
 
+    def to(self, device):
+        super().to(device)
+        self.center = self.center.to(device)
+        self.radius = self.radius.to(device)
+        return self
 
-class Model:
+
+class Polygon(AbstractShape):
     def __init__(self, verts, N=None):
         """
         Stores a set of model vertices and positions
@@ -559,84 +648,22 @@ class Model:
         else:
             self.verts = self.verts.permute(0, 2, 1)
             N = len(verts)
-        self.se2 = torch.zeros(N, 3)
-        self.scale = torch.ones(N, 2)
-        self.parent = None
-        self.children = []
+        super().__init__(N)
 
-    @property
-    def N(self):
-        """
-        returns the number of model instances
-        """
-        return self.se2.shape[0]
-
-    @property
-    def __len__(self):
-        return self.N
-
-    @property
-    def pos(self):
-        """
-        returns N, 2 model positions
-        """
-        return self.se2[:, 0:2]
-
-    @pos.setter
-    def pos(self, pos):
-        """
-        pos: (N, 2)
-        """
-        self.se2[:, 0:2] = pos
-
-    @property
-    def theta(self):
-        """
-        returns theta angle in radians
-        """
-        return self.se2[:, 2]
-
-    @theta.setter
-    def theta(self, theta):
-        """
-        theta: (N) in radians
-        """
-        self.se2[:, 2] = theta
-
-    def parents(self):
-        parents = []
-        parent = self.parent
-        while parent is not None:
-            parents += [parent]
-            parent = parent.parent
-        return parents
-
-    def world_verts(self):
+    def world(self):
         t_matrix = transform_matrix(self.se2, self.scale)
         for parent in self.parents():
             parent_t_matrix = transform_matrix(parent.se2, parent.scale)
             t_matrix = torch.matmul(parent_t_matrix, t_matrix)
         return apply_transform(t_matrix, self.verts)
 
-    def world_transform(self):
-        t_matrix = transform_matrix(self.se2, self.scale)
-        for parent in self.parents():
-            parent_t_matrix = transform_matrix(parent.se2, parent.scale)
-            t_matrix = torch.matmul(parent_t_matrix, t_matrix)
-        return t_matrix
-
-    def attach(self, model):
-        model.parent = self
-        self.children.append(model)
-
     def to(self, device):
+        super().to(device)
         self.verts = self.verts.to(device)
-        self.se2 = self.se2.to(device)
-        self.scale = self.scale.to(device)
         return self
 
 
-class Polygon:
+class OldPolygon:
     def __init__(self, verts, pos=None, scale=None, theta=None):
         """
         Use CLOCKWISE winding for vertices
@@ -696,7 +723,7 @@ class Polygon:
             if num_verts[0] != num_verts[i]:
                 raise Exception(f'polygon with index {i} had {num_verts[i]} vertices'
                                 f' all polygons must have same number of vertices, eg: {num_verts[0]} vertices')
-        return torch.stack([p.world_verts for p in polys])
+        return torch.stack([p.world for p in polys])
 
 
 def cross2D(v1, v2):
@@ -969,17 +996,17 @@ if __name__ == '__main__':
     axes[2].set_title('polygon clipping with a polygon')
 
     quads = [
-        Polygon([
+        OldPolygon([
             [1., 1., -1., -1.],
             [1, -1., -1., 1]
         ], pos=Vector2(0, 2.5), scale=Vector2(2, 2), theta=torch.pi / 4),
-        Polygon([
+        OldPolygon([
             [1, +1., -1., -1.],
             [1, -1., -1., +1.]
         ], pos=Vector2(1.5, 0), scale=Vector2(0.5, 0.5)),
     ]
 
-    triangle = Polygon([
+    triangle = OldPolygon([
         [0., 2, -2],
         [2., 0, +0]
     ], pos=Vector2(0, -1))
@@ -989,7 +1016,7 @@ if __name__ == '__main__':
 
     axes[2].add_patch(PolygonPatch(triangle.verts, color='green'))
 
-    quad_tensor = Polygon.stack(quads)
+    quad_tensor = OldPolygon.stack(quads)
 
     for q in quad_tensor:
         clipped_q = polygon_clip(q, triangle.verts)
@@ -1055,14 +1082,14 @@ if __name__ == '__main__':
     """
     axes[5].set_title('SE2 style transforms')
 
-    quads = Model([
+    quads = Polygon([
         [1., 1., -1., -1.],
         [1, -1., -1., 1]
     ], N=4)
 
     quads.pos = torch.tensor([[0, 0], [3, 3], [-3, -3], [-5, -5]])
 
-    for p in quads.world_verts():
+    for p in quads.world():
         axes[5].add_patch(PolygonPatch(p, color='red'))
 
     tri = torch.tensor([
@@ -1088,12 +1115,12 @@ if __name__ == '__main__':
     axes[6].set_xlim(-5, 5)
     axes[6].set_ylim(-5, 5)
 
-    tanks = Model([
+    tanks = Polygon([
         [1., 1., -1., -1.],
         [1, -1., -1., 1]
     ], N=4)
 
-    turrets = Model([
+    turrets = Polygon([
         [0., 1., -1.],
         [1, 0., 0.]
     ], N=4)
@@ -1103,11 +1130,11 @@ if __name__ == '__main__':
     tanks.theta = torch.tensor([radians(-45), radians(0), radians(45.), radians(90.)])
     turrets.theta = torch.tensor([radians(0), radians(90.), radians(180.), radians(270)])
 
-    for tank in tanks.world_verts():
+    for tank in tanks.world():
         tank_patch = PolygonPatch(tank, color='blue')
         axes[6].add_patch(tank_patch)
 
-    for turret in turrets.world_verts():
+    for turret in turrets.world():
         turrent_patch = PolygonPatch(turret, color='green')
         axes[6].add_patch(turrent_patch)
 
