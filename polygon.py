@@ -510,11 +510,11 @@ class AbstractShape:
     GREEN = (0, 255, 0)
     BLUE = (0, 0, 255)
 
-    def __init__(self, N):
+    def __init__(self, N, color=BLUE):
         """
         Abstract class to represent a 2D geometry object
         """
-        self.color = self.BLUE
+        self.color = color
         self.se2 = torch.zeros(N, 3)
         self.scale = torch.ones(N, 2)
         self.parent = None
@@ -601,11 +601,11 @@ class AbstractShape:
 
 
 class Circle(AbstractShape):
-    def __init__(self, center=None, radius=None, N=1, scale_in='x'):
+    def __init__(self, center=None, radius=None, N=1, scale_in='x', color=AbstractShape.BLUE):
         self.center = center if center is not None else torch.zeros(1, 1, 2)
         self.radius = radius if center is not None else torch.ones(1, 1, 1)
         self.scale_in = scale_in
-        super().__init__(N)
+        super().__init__(N, color)
 
     def world(self):
         radius = self.radius * self.scale[:, 0] if self.scale_in is 'x' else self.radius * self.scale[:, 1]
@@ -619,7 +619,7 @@ class Circle(AbstractShape):
 
 
 class Polygon(AbstractShape):
-    def __init__(self, verts, N=None):
+    def __init__(self, verts, N=None, color=AbstractShape.BLUE):
         """
         Stores a set of model vertices and positions
         verts: polygons are written as 2 lists of co-ordinates [[x1, x2, x3], [y1, y2, y3]]
@@ -648,7 +648,7 @@ class Polygon(AbstractShape):
         else:
             self.verts = self.verts.permute(0, 2, 1)
             N = len(verts)
-        super().__init__(N)
+        super().__init__(N, color)
 
     def world(self):
         t_matrix = transform_matrix(self.se2, self.scale)

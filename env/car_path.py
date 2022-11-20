@@ -9,6 +9,7 @@ import polygon
 from polygon import raycast, line_seg_intersect, edges, clip_line_segment_by_poly, roll, PygameCamera
 from math import radians
 from copy import deepcopy
+from torch.nn.functional import softplus
 
 params = {
     'CAR_WIDTH': 2.,
@@ -307,42 +308,28 @@ class Track:
         return self.max_x - self.min_x
 
 
-class Car:
-    def __init__(self, n_cars, device='cpu'):
-        self.n_cars = n_cars
-        self.device = device
-        cw, cl = params['CAR_WIDTH'], params['CAR_LENGTH']
-        self.body = polygon.Polygon([
-            [cw / 2, cw / 2, -cw / 2, -cw / 2],
-            [cl / 2, -cl / 2, -cl / 2, cl / 2]
-        ], N=n_cars).to(device)
-
-        W = params['PATH_EXTRA_WIDTH'] + params['CAR_WIDTH']
-
+class Path:
+    def __init__(self, n_cars=1, device='cpu'):
+        """
+        Set of rectangular segments with forward kinematics defined
+        by joint angles and arm lengths
+        """
         self.path = []
+        W = params['PATH_EXTRA_WIDTH'] + params['CAR_WIDTH']
         for j in range(params['PATH_SECTIONS'] + 1):
             self.path += [polygon.Polygon([
                 [W / 2, W / 2, -W / 2, -W / 2],
                 [1., 0, 0, 1.],
             ], N=n_cars).to(device)]
-            self.body.attach(self.path[j])
 
         self.end_effector = polygon.Circle(radius=W * 2, N=n_cars).to(device)
-        self.body.attach(self.end_effector)
+        self.path_intersects_curb = None
+        self.tarmac_segments_traversed = None
 
-        lidar_angles = torch.tensor(
-            [radians(theta) for theta in torch.linspace(-45., 45, params['N_BEAMS'])]
-        )
-        self.lidar = polygon.Polygon([
-            [0.] * len(lidar_angles) + [math.sin(theta) for theta in lidar_angles],
-            [0.] * len(lidar_angles) + [math.cos(theta) for theta in lidar_angles]
-        ], N=n_cars).to(device)
-        self.body.attach(self.lidar)
-
-        # self.length1 = torch.ones(self.n_cars, device=device)
-        self.theta1 = torch.zeros(self.n_cars, device=device)
-        self.theta2 = torch.zeros(self.n_cars, device=device)
-        self.theta3 = torch.zeros(self.n_cars, device=device)
+    def attach(self, model):
+        for s in self.path:
+            model.attach(s)
+        model.attach(self.end_effector)
 
     @staticmethod
     def joint_transform(theta, length):
@@ -361,30 +348,40 @@ class Car:
         """
         Ts = []
         for t, l in zip(theta.permute(1, 0), length.permute(1, 0)):
-            Ts += [Car.joint_transform(t.T, l.T)]
+            Ts += [Path.joint_transform(t.T, l.T)]
         Js = [Ts[0]]
         for i, T in enumerate(Ts[1:]):
             Js += [Js[-1].matmul(T)]
         return Js
 
-    def set_path_params(self, theta):
-        N, J = theta.shape
-
-        # compute the positions of the path components
+    def set_path_params(self, theta, length):
+        """
+        Sets the arm parameters.
+        Re-write this function to change the properties of the arm
+        """
+        N, = theta.shape
+        S = params['PATH_SECTIONS'] + 1
         zero = torch.zeros((N, 1), device=theta.device)
-        theta = torch.cat((theta, zero), dim=1)
-        pl = torch.full((N, 1), params['PATH_LENGTH'], device=theta.device)
-        length = torch.cat([zero] + [pl] * (params['PATH_SECTIONS']), dim=1)
         one = torch.ones((N, 1), device=theta.device)
-        joints = Car.forward_kinematics(theta, length)
+
+        theta = theta.unsqueeze(1).repeat(1, S)
+        theta[:, -1] = 0.
+
+        seg_length = length.unsqueeze(1).repeat(1, S)
+        seg_length[:, 0] = 0.
+
+        joints = Path.forward_kinematics(theta, seg_length)
 
         # put the rectangles in the correct locations
         for i in range(params['PATH_SECTIONS']):
             self.path[i].se2 = polygon.se2_from_adjoint(joints[i])
-            self.path[i].scale = torch.cat([one, pl], dim=1)
+            self.path[i].scale = torch.cat([one, length.unsqueeze(1)], dim=1)
         self.end_effector.se2 = polygon.se2_from_adjoint(joints[params['PATH_SECTIONS']])
 
     def end_effector_se2(self):
+        """
+        returns the position and orientation of the end effector
+        """
         return self.end_effector.se2
 
     def path_edges(self):
@@ -395,6 +392,11 @@ class Car:
         return path_edge_start, path_edge_end
 
     def check_collision(self, curb_segment_start, curb_segment_end, tarmac):
+        """
+        curb_segment_start: (N, 2) line segment start points
+        curb_segment_end: (N, 2) line segment end points
+        tarmac: (P, V, 2) polygons
+        """
 
         # check car path
         path_edge_start, path_edge_end = self.path_edges()
@@ -403,26 +405,60 @@ class Car:
         p, path_intersect_roadside = line_seg_intersect(path_edge_start, path_edge_end,
                                                         curb_segment_start,
                                                         curb_segment_end)
-        path_intersects_curb = path_intersect_roadside.permute(1, 0, 2).any(1).any(1)
+        self.path_intersects_curb = path_intersect_roadside.permute(1, 0, 2).any(1).any(1)
 
         start_path_clip, end_path_clip, road_intersect_path = \
             clip_line_segment_by_poly(path_edge_start, path_edge_end, tarmac)
 
-        if road_intersect_path.all(2).any():
-            mask = road_intersect_path.all(2)
-            print(path_edge_start[mask].shape)
-            print(path_edge_start[mask].shape)
-            print(path_edge_end[mask])
-            print(start_path_clip[mask])
-            print(end_path_clip[mask])
+        # if road_intersect_path.all(2).any():
+        #     mask = road_intersect_path.all(2)
+        #     print(path_edge_start[mask].shape)
+        #     print(path_edge_start[mask].shape)
+        #     print(path_edge_end[mask])
+        #     print(start_path_clip[mask])
+        #     print(end_path_clip[mask])
 
-        tarmac_segments_traversed = road_intersect_path.any(1)
-        return path_intersects_curb, tarmac_segments_traversed
+        self.tarmac_segments_traversed = road_intersect_path.any(1)
+        return self.path_intersects_curb, self.tarmac_segments_traversed
+
+    def draw(self, camera):
+        if self.tarmac_segments_traversed is not None:
+            path_colors = torch.empty((self.path_intersects_curb.shape[0], 3), dtype=torch.uint8)
+            path_colors[self.path_intersects_curb] = torch.tensor(PATH_BLOCKED, dtype=torch.uint8)
+            path_colors[~self.path_intersects_curb] = torch.tensor(PATH_CLEAR, dtype=torch.uint8)
+            for path in self.path:
+                camera.draw_polygon(path.world(), path_colors)
+        else:
+            for path in self.path:
+                camera.draw_polygon(path.world(), (100, 100, 100))
+                radius = torch.full_like(path.se2[:, 0], fill_value=50.)
+                # camera.draw_circle(path.se2, radius, color=(125, 125, 125))
+
+
+class Car:
+    def __init__(self, n_cars, device='cpu'):
+        self.n_cars = n_cars
+        self.device = device
+        cw, cl = params['CAR_WIDTH'], params['CAR_LENGTH']
+        self.body = polygon.Polygon([
+            [cw / 2, cw / 2, -cw / 2, -cw / 2],
+            [cl / 2, -cl / 2, -cl / 2, cl / 2]
+        ], N=n_cars, color=CAR).to(device)
+        self.path = Path(n_cars, device)
+        self.path.attach(self.body)
+
+        lidar_angles = torch.tensor(
+            [radians(theta) for theta in torch.linspace(-45., 45, params['N_BEAMS'])]
+        )
+        self.lidar = polygon.Polygon([
+            [0.] * len(lidar_angles) + [math.sin(theta) for theta in lidar_angles],
+            [0.] * len(lidar_angles) + [math.cos(theta) for theta in lidar_angles]
+        ], N=n_cars).to(device)
+        self.body.attach(self.lidar)
 
     def draw(self, camera):
         camera.draw(self.body)
-        for path in self.path:
-            camera.draw(path)
+        self.path.draw(camera)
 
 
 class CarRacingPathEnv(gym.Env):
@@ -447,7 +483,7 @@ class CarRacingPathEnv(gym.Env):
             self.device = device
             self.crash_penalty = crash_penalty
             self.observation_space = gym.spaces.Box(low=0., high=1., shape=(params['N_BEAMS'],), dtype=np.float32)
-            self.action_space = gym.spaces.Box(low=-1., high=1., shape=(params['PATH_SECTIONS'],), dtype=np.float32)
+            self.action_space = gym.spaces.Box(low=-1., high=1., shape=(2,), dtype=np.float32)
             if not headless:
                 # init pygame DISPLAY and VARS
                 pygame.init()
@@ -538,25 +574,13 @@ class CarRacingPathEnv(gym.Env):
             if isinstance(action, np.ndarray):
                 action = torch.from_numpy(action)
 
-            # steering_input = action[:, 0].clamp(-1, 1)
-            # target_dist_input = action[:, 1].clamp(-1, 1)
-            # target_dist_input = (target_dist_input + 1.) / 2.  # rescale -1 - 1 to 0 - 1
-
-            # set the steering angles and distance
-            # steer_angle = params['MAX_STEERING_ANGLE'] * steering_input
-            # curve_apex = params['MAX_TARGET_DISTANCE'] * target_dist_input
-
             action = action.clamp(-1, 1)
-            theta = action * params['MAX_STEERING_ANGLE']
-            self.car.set_path_params(theta)
-
-            # self.car.set_path(steer_angle, target_distance)
-            # self.car.set_path_params(curve_apex, steer_angle)
-            # theta_test = torch.tensor([(self.n_steps / 20.) % (torch.pi * 2)], device=self.device)
-            # theta_test = theta_test.repeat(self.n_cars)
+            theta = action[:, 0] * params['MAX_STEERING_ANGLE']
+            length = softplus(action[:, 1]) * params['MAX_TARGET_DISTANCE'] / params['PATH_SECTIONS']
+            self.car.path.set_path_params(theta, length)
 
             # check if path goes of road, and how many tarmac segments it passes over
-            self.path_off_road, self.road_traversed = self.car.check_collision(
+            self.path_off_road, self.road_traversed = self.car.path.check_collision(
                 self.track.curb_segment_start, self.track.curb_segment_end, self.track.tarmac)
 
             if not self.headless:
@@ -564,8 +588,9 @@ class CarRacingPathEnv(gym.Env):
                 self.car_prev = deepcopy(self.car)
 
             # move car
-            self.car.body.se2 = self.car.end_effector.se2_world
+            self.car.body.se2 = self.car.path.end_effector.se2_world
 
+            # reward
             reward = (self.road_traversed & ~self.track_visited).sum(1) - 0.1
             self.track_visited[self.road_traversed] = True
             lapped = self.track_visited.all(1)
@@ -607,15 +632,6 @@ class CarRacingPathEnv(gym.Env):
         self.camera.draw_polygon(self.track.tarmac, self.track.colors[0])
         self.camera.draw_line(self.track.curb_segment_start, self.track.curb_segment_end, color=ROAD_EDGE, width=4)
 
-    def draw_path(self, car):
-        if self.road_traversed is not None:
-            path_colors = torch.empty((self.path_off_road.shape[0], 3), dtype=torch.uint8)
-            path_colors[self.path_off_road] = torch.tensor(PATH_BLOCKED, dtype=torch.uint8)
-            path_colors[~self.path_off_road] = torch.tensor(PATH_CLEAR, dtype=torch.uint8)
-            for path in car.path:
-                self.camera.draw_polygon(path.world(), path_colors)
-            self.camera.draw_circle(*car.end_effector.world(), BLUE)
-
     def render(self, mode='human', fps=None, text=None):
         if not self.headless:
             with torch.no_grad():
@@ -634,7 +650,7 @@ class CarRacingPathEnv(gym.Env):
                 # draw car state before transition
                 self.camera.draw_polygon(self.car_prev.body.world(), CAR)
                 # self.draw_car_path(self.car_prev)
-                self.draw_path(self.car_prev)
+                self.car_prev.draw(self.camera)
 
                 returns_str = 'retns: '
                 for r in self.returns[-5:]:
@@ -683,14 +699,16 @@ def main():
 
     def policy(state):
         with torch.no_grad():
+            print('policy')
             # simple steering angle policy with conservative moves
             dist, index = torch.max(state, dim=1)
             n_max = (state == dist.unsqueeze(1)).sum(dim=1)
             index += n_max.div(2, rounding_mode='trunc')
             turn = index - params['N_BEAMS'] // 2
             turn = turn * 1. / 8.
-            dist = dist * params['MAX_BEAM_LEN'] / params['MAX_TARGET_DISTANCE'] - 1.
-            return torch.stack([turn / params['PATH_SECTIONS']] * params['PATH_SECTIONS'], dim=-1)
+            dist = dist / params['MAX_BEAM_LEN'] * params['MAX_TARGET_DISTANCE']
+            turn = turn / params['PATH_SECTIONS']
+            return torch.stack([turn, dist], dim=-1)
 
     state = env.reset()
     env.render()
