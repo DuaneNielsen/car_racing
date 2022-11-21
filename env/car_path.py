@@ -576,7 +576,7 @@ class CarRacingPathEnv(gym.Env):
 
             action = action.clamp(-1, 1)
             theta = action[:, 0] * params['MAX_STEERING_ANGLE']
-            length = softplus(action[:, 1]) * params['MAX_TARGET_DISTANCE'] / params['PATH_SECTIONS']
+            length = (softplus(action[:, 1]) - 0.3) * params['MAX_TARGET_DISTANCE'] / params['PATH_SECTIONS']
             self.car.path.set_path_params(theta, length)
 
             # check if path goes of road, and how many tarmac segments it passes over
@@ -706,8 +706,9 @@ def main():
             index += n_max.div(2, rounding_mode='trunc')
             turn = index - params['N_BEAMS'] // 2
             turn = turn * 1. / 8.
-            dist = dist / params['MAX_BEAM_LEN'] * params['MAX_TARGET_DISTANCE']
+            dist = dist * params['MAX_BEAM_LEN'] / params['MAX_TARGET_DISTANCE'] / 2.
             turn = turn / params['PATH_SECTIONS']
+            print(dist)
             return torch.stack([turn, dist], dim=-1)
 
     state = env.reset()
