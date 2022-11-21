@@ -15,14 +15,14 @@ params = {
     'CAR_WIDTH': 2.,
     'CAR_LENGTH': 4.,
     'PATH_EXTRA_WIDTH': 1.,
-    'PATH_LENGTH': 5.,
+    'MIN_PATH_LENGTH': 5.,
+    'MAX_PATH_LENGTH': 50.,
     'PATH_SECTIONS': 5,
     'CAR_SCALE': (1.5, 1.5),
-    'N_BEAMS': 13,
+    'N_BEAMS': 21,
     'MAX_BEAM_LEN': 300,
-    'MAX_STEERING_ANGLE': radians(80.),
-    'MAX_STEERING_ADJUST': radians(50.),
-    'MAX_TARGET_DISTANCE': 50.,
+    'LIDAR_SPREAD': 1.,
+    'MAX_STEERING_ANGLE': radians(180.),
 }
 
 
@@ -448,8 +448,9 @@ class Car:
         self.path.attach(self.body)
 
         lidar_angles = torch.tensor(
-            [radians(theta) for theta in torch.linspace(-45., 45, params['N_BEAMS'])]
+            [theta for theta in torch.linspace(-torch.pi, torch.pi, params['N_BEAMS'])]
         )
+        lidar_angles = torch.pi / 4. * lidar_angles**3 / 3**3
         self.lidar = polygon.Polygon([
             [0.] * len(lidar_angles) + [math.sin(theta) for theta in lidar_angles],
             [0.] * len(lidar_angles) + [math.cos(theta) for theta in lidar_angles]
@@ -575,8 +576,9 @@ class CarRacingPathEnv(gym.Env):
                 action = torch.from_numpy(action)
 
             action = action.clamp(-1, 1)
-            theta = action[:, 0] * params['MAX_STEERING_ANGLE']
-            length = (softplus(action[:, 1]) - 0.3) * params['MAX_TARGET_DISTANCE'] / params['PATH_SECTIONS']
+            theta = action[:, 0] * params['MAX_STEERING_ANGLE'] / params['PATH_SECTIONS']
+            length = (softplus(action[:, 1]) - 0.3) * (params['MAX_PATH_LENGTH'] - params['MIN_PATH_LENGTH']) + params['MIN_PATH_LENGTH']
+            length = length / params['PATH_SECTIONS']
             self.car.path.set_path_params(theta, length)
 
             # check if path goes of road, and how many tarmac segments it passes over
@@ -706,7 +708,7 @@ def main():
             index += n_max.div(2, rounding_mode='trunc')
             turn = index - params['N_BEAMS'] // 2
             turn = turn * 1. / 8.
-            dist = dist * params['MAX_BEAM_LEN'] / params['MAX_TARGET_DISTANCE'] / 2.
+            dist = dist * params['MAX_BEAM_LEN'] / params['MAX_PATH_LENGTH'] / 2.
             turn = turn / params['PATH_SECTIONS']
             print(dist)
             return torch.stack([turn, dist], dim=-1)

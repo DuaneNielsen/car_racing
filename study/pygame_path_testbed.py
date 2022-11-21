@@ -3,7 +3,7 @@ from pygame import Vector2
 from polygon import adjoint_matrix, apply_transform, Polygon, se2_from_adjoint, Circle, PygameCamera
 import torch
 import pygame.locals
-from math import cos, sin, degrees
+from math import cos, sin, degrees, radians
 from env.car_path import Path
 
 WHITE = (255, 255, 255)
@@ -13,7 +13,7 @@ RED = (255, 0, 0)
 GRAY = (125, 125, 125)
 
 # clockwise winding required for the clipping to work
-H, W = 20., 5.
+H, W = 4., 2.
 car = Polygon([
     [W, W, -W, -W],
     [H, -H, -H, H],
@@ -33,9 +33,9 @@ def main():
                           scale=torch.ones(2)*3.5, resolution=(1000, 800))
 
     DISPLAY.fill(WHITE)
-    t = 0.0
+    t = radians(180./5.)
 
-    car.pos = torch.tensor([[-20, 0], [20, 0]])
+    car.pos = torch.tensor([[-60, 0], [20, 0]])
 
     while True:
         clock.tick(25)
@@ -47,13 +47,13 @@ def main():
         # draw the red rotating rectangle on the blue clipping rectangle
         DISPLAY.fill(WHITE)
         theta = torch.tensor([t, t-0.2])
-        length = torch.tensor([t*100., t*50.+0.2])
+        length = torch.tensor([t*5., t*50.+0.2])
 
         path.set_path_params(theta, length)
         camera.draw(car)
         path.draw(camera)
 
-        t += 0.001
+        # t += 0.001
         camera.draw_text([f'{degrees(t):.2f}'], GREEN)
 
         pygame.display.flip()
